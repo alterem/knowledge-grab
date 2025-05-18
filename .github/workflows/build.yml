@@ -93,13 +93,17 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
-      - name: Build macOS
-        run: pnpm tauri build
+      - name: Build macOS (Apple Silicon)
+        run: pnpm tauri build --target aarch64-apple-darwin
+      - name: Build macOS (Intel)
+        run: pnpm tauri build --target x86_64-apple-darwin
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
 
   release:
     needs: [build-windows, build-linux, build-macos]

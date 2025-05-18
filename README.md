@@ -60,6 +60,18 @@
     ```
     这个命令会构建前端项目并将 Rust 后端编译成可执行文件，最终生成对应操作系统的安装包或可执行文件。构建好的文件通常位于 `src-tauri/target/release/bundle/` 目录下。
 
+## 常见问题 (FAQ)
+
+**Q: 在 macOS 上下载的应用无法直接打开，提示“无法验证开发者”或类似错误怎么办？**
+
+A: 这是 macOS 的 Gatekeeper 安全机制导致的。由于应用未经过 Apple 的开发者认证，首次打开可能会被阻止。你可以在终端执行以下命令来允许应用运行：
+
+```bash
+xattr -rd com.apple.quarantine /Applications/KnowledgeGrab.app
+```
+
+请根据你的实际安装路径修改 `/Applications/KnowledgeGrab.app`。执行此命令后，你应该就能正常打开应用了。
+
 ## 参与贡献
 
 欢迎提交 Issue 或 Pull Request。
@@ -67,3 +79,4 @@
 ## 开源许可
 
 本项目采用 [MIT 许可协议](LICENSE)。
+```
