@@ -120,16 +120,17 @@ jobs:
         id: changelog
         run: |
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
+
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-            git log --pretty=format:"* %s (%h)" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+            git log --pretty=format:"* %s (%h)" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           else
-            echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-            git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+            git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           fi
+
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -151,6 +152,7 @@ jobs:
           name: Release ${{ github.ref_name }}
           body: |
             ### Release ${{ github.ref_name }}
+            
             #### Changelog
             ${{ steps.changelog.outputs.CHANGELOG }}
             
