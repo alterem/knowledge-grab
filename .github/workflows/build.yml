@@ -120,15 +120,26 @@ jobs:
         id: changelog
         run: |
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
+          echo "::debug::Previous tag found: '$PREVIOUS_TAG'"
+
           CHANGELOG_CONTENT=""
+          GIT_LOG_COMMAND=""
+
           if [ -z "$PREVIOUS_TAG" ]; then
+            GIT_LOG_COMMAND='git log --pretty=format:"* %s (%h)"'
             CHANGELOG_CONTENT=$(git log --pretty=format:"* %s (%h)")
           else
+            GIT_LOG_COMMAND="git log --pretty=format:\"* %s (%h)\" $PREVIOUS_TAG..HEAD"
             CHANGELOG_CONTENT=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD)
           fi
-          
-          printf '%s<<EOF\n%s\nEOF\n' "CHANGELOG" "$CHANGELOG_CONTENT" >> "$GITHUB_ENV"
+          echo "::debug::Executing command: $GIT_LOG_COMMAND"
+          echo "::debug::Raw git log output:"
+          echo "$CHANGELOG_CONTENT"
+          echo "::debug::End of raw git log output."
+          DELIMITER=$(openssl rand -hex 8) 
+          echo "::debug::Writing to GITHUB_OUTPUT with delimiter $DELIMITER"
+          printf "%s<<%s\n%s\n%s\n" "CHANGELOG" "$DELIMITER" "$CHANGELOG_CONTENT" "$DELIMITER" >> "$GITHUB_OUTPUT"
+          echo "::debug::Finished writing to GITHUB_OUTPUT."
         shell: bash
 
       - name: Download Artifacts
