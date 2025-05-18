@@ -1,0 +1,42 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "电子书下载器"
+authors = ["Alterem"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.85.0"
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.2.0", features = [] }
+
+[dependencies]
+reqwest = { version = "0.12.15", features = ["json", "stream"] }
+tokio = { version = "1.45.0", features = ["full"] }
+tokio-util = "0.7.15"
+once_cell = "1.21.3"
+url = "2.5.4"
+futures-util = "0.3.31"
+serde_json = "1.0.140"
+serde = { version = "1.0.219", features = ["derive"] }
+log = "0.4.27"
+tauri = { version = "2.5.1", features = [] }
+tauri-plugin-log = "2.4.0"
+tauri-plugin-dialog = "2.2.1"
+tauri-plugin-fs = "2.2.1"
+base64 = "0.22.1"

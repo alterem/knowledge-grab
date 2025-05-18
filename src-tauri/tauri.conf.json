@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "KnowledgeGrab",
+  "version": "1.0.0",
+  "identifier": "com.alterem.textbookdownloader",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:15173",
+    "beforeDevCommand": "pnpm run dev",
+    "beforeBuildCommand": "pnpm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "教科书下载器",
+        "width": 1100,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "© 2025 版权所有",
+    "shortDescription": "一个用于下载教科书的应用",
+    "longDescription": "一个用于下载教科书的应用，支持批量下载和进度跟踪。",
+    "publisher": "zara"
+  }
+}
