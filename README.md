@@ -4,7 +4,7 @@
 
 ## 项目简介
 
-`knowledge-grab` 是一个基于 [Tauri](https://tauri.app/) 和 [Vue 3](https://vuejs.org/) 构建的桌面应用程序，旨在帮助用户方便地从 [国家中小学智慧教育平台 (basic.smartedu.cn)](https://basic.smartedu.cn/) 下载各类教育资源。
+`knowledge-grab` 是一个基于 [Tauri](https://tauri.app/) 和 [Vue 3](https://vuejs.org/) 构建的桌面应用程序，方便用户从 [国家中小学智慧教育平台 (basic.smartedu.cn)](https://basic.smartedu.cn/) 下载各类教育资源。
 
 ## 技术栈
 
@@ -15,9 +15,9 @@
 
 ## 功能
 
-- 从国家中小学智慧教育平台下载指定资源。
-- 支持批量下载
-- 分类下载
+- 支持从国家中小学智慧教育平台下载特定教育资源。
+- 支持批量下载功能。
+- 支持按分类下载。
 
 ## 一些截图
 
@@ -31,8 +31,8 @@
 ## 环境要求
 
 - [Node.js](https://nodejs.org/) (推荐 LTS 版本)
-- [Rust](https://www.rust-lang.org/tools/install) (由 Tauri 框架需要)
-- 构建 Tauri 应用所需的其他依赖 (详见 [Tauri 官方文档 - Prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
+- [Rust](https://www.rust-lang.org/tools/install) (Tauri 框架需要)
+- 构建 Tauri 应用所需的其他依赖项 (详见 [Tauri 官方文档 - Prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
 
 ## 启动项目 (开发模式)
 
@@ -49,7 +49,7 @@
     ```bash
     pnpm tauri dev
     ```
-    应用程序窗口将会打开，并且前端代码的修改会实时反映。
+    应用程序窗口会打开，前端代码修改会实时反映。
 
 ## 打包项目 (构建发布版本)
 
@@ -58,19 +58,23 @@
     ```bash
     pnpm tauri build
     ```
-    这个命令会构建前端项目并将 Rust 后端编译成可执行文件，最终生成对应操作系统的安装包或可执行文件。构建好的文件通常位于 `src-tauri/target/release/bundle/` 目录下。
+    这个命令会构建前端项目并将 Rust 后端编译成可执行文件，生成对应操作系统的安装包或可执行文件。构建好的文件通常在 `src-tauri/target/release/bundle/` 目录下。
 
 ## 常见问题 (FAQ)
 
 **Q: 在 macOS 上下载的应用无法直接打开，提示“无法验证开发者”或类似错误怎么办？**
 
-A: 这是 macOS 的 Gatekeeper 安全机制导致的。由于应用未经过 Apple 的开发者认证，首次打开可能会被阻止。你可以在终端执行以下命令来允许应用运行：
+A: 这是 macOS 的 Gatekeeper 安全机制导致的。应用未经过 Apple 的开发者认证，首次打开可能会被阻止。可以在终端执行以下命令来允许应用运行：
 
 ```bash
 xattr -rd com.apple.quarantine /Applications/KnowledgeGrab.app
 ```
 
-请根据你的实际安装路径修改 `/Applications/KnowledgeGrab.app`。执行此命令后，你应该就能正常打开应用了。
+请根据实际安装路径修改 `/Applications/KnowledgeGrab.app`。执行此命令后，应该就能正常打开应用了。
+
+**Q: 下载时出现 403 错误怎么办？**
+
+A: 出现 403 错误通常是对端服务器的访问限制导致的。目前暂时没有有效的解决办法。
 
 ## 参与贡献
 
@@ -79,4 +83,3 @@ xattr -rd com.apple.quarantine /Applications/KnowledgeGrab.app
 ## 开源许可
 
 本项目采用 [MIT 许可协议](LICENSE)。
-```
