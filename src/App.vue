@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onUnmounted, onMounted, provide } from 'vue';
 import { ElContainer, ElHeader, ElAside, ElMain } from 'element-plus';
-import { Sunny, Moon, QuestionFilled } from '@element-plus/icons-vue';
+import { Sunny, Moon, QuestionFilled, Promotion } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
 import { useRouter } from 'vue-router';
 
@@ -84,7 +84,8 @@ onUnmounted(() => {
   <el-config-provider>
     <el-container class="h-screen w-screen">
 
-      <el-header class="flex items-center justify-between border-b border-gray-200 px-6" :style="{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }">
+      <el-header class="flex items-center justify-between border-b border-gray-200 px-6"
+        :style="{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }">
         <div class="flex items-center">
           <img src="/icon.png" alt="Logo" class="h-8 w-auto mr-3" @contextmenu.prevent>
           <span class="text-xl font-semibold" :style="{ color: 'var(--text-color)' }">国家中小学智慧教育平台</span>
@@ -101,17 +102,23 @@ onUnmounted(() => {
               <QuestionFilled />
             </el-icon>
           </el-tooltip>
+          <el-tooltip content="GitHub 仓库" placement="top">
+            <a href="https://github.com/alterem/knowledge-grab" target="_blank" rel="noopener noreferrer" class="mt-2">
+              <el-icon :size="20" class="cursor-pointer text-gray-600 hover:text-blue-500">
+                <Promotion />
+              </el-icon>
+            </a>
+          </el-tooltip>
         </div>
       </el-header>
 
       <el-container>
-        <el-aside :width="asideWidth + 'px'" class="flex flex-col overflow-y-auto" :style="{ backgroundColor: 'var(--secondary-bg-color)' }">
+        <el-aside :width="asideWidth + 'px'" class="flex flex-col overflow-y-auto"
+          :style="{ backgroundColor: 'var(--secondary-bg-color)' }">
           <Sidebar />
         </el-aside>
-        <div
-          class="w-1 cursor-ew-resize bg-gray-300 hover:bg-blue-500 transition-colors duration-200"
-          @mousedown="startDragging"
-        ></div>
+        <div class="w-1 cursor-ew-resize bg-gray-300 hover:bg-blue-500 transition-colors duration-200"
+          @mousedown="startDragging"></div>
 
         <el-main class="p-0 flex-1 overflow-y-auto" :style="{ backgroundColor: 'var(--bg-color)' }">
           <router-view></router-view>
@@ -122,5 +129,4 @@ onUnmounted(() => {
   </el-config-provider>
 </template>
 
-<style scoped>
-</style>
+<style scoped></style>
