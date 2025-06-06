@@ -6,6 +6,23 @@
 
 `knowledge-grab` 是一个基于 [Tauri](https://tauri.app/) 和 [Vue 3](https://vuejs.org/) 构建的桌面应用程序，方便用户从 [国家中小学智慧教育平台 (basic.smartedu.cn)](https://basic.smartedu.cn/) 下载各类教育资源。
 
+
+## 模板
+
+> 👏 欢迎 Starred & Use this template 
+
+#### Vue + Naive UI
+
+https://github.com/alterem/tauri-vue-template/tree/naiveui
+
+#### Vue + Element Plus
+
+https://github.com/alterem/tauri-vue-template/tree/naiveui
+
+#### React + Ant Design
+
+https://github.com/alterem/tauri-react-template
+
 ## 技术栈
 
 - **框架**: Vue 3 (使用 Composition API)
