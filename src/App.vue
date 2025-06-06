@@ -4,11 +4,20 @@ import { ElContainer, ElHeader, ElAside, ElMain } from 'element-plus';
 import { Sunny, Moon, QuestionFilled, Promotion } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
 import { useRouter } from 'vue-router';
+import { invoke } from '@tauri-apps/api/core';
 
 const router = useRouter();
 
 const onHelp = () => {
   router.push('/help');
+}
+
+const openGitHub = async () => {
+  try {
+    await invoke('open_url', { url: 'https://github.com/alterem/knowledge-grab' });
+  } catch (error) {
+    console.error('无法打开 GitHub 链接:', error);
+  }
 }
 
 const asideWidth = ref(200);
@@ -103,11 +112,10 @@ onUnmounted(() => {
             </el-icon>
           </el-tooltip>
           <el-tooltip content="GitHub 仓库" placement="top">
-            <a href="https://github.com/alterem/knowledge-grab" target="_blank" rel="noopener noreferrer" class="mt-2">
-              <el-icon :size="20" class="cursor-pointer text-gray-600 hover:text-blue-500">
-                <Promotion />
-              </el-icon>
-            </a>
+            <el-icon :size="20" class="cursor-pointer text-gray-600 hover:text-blue-500" color="#029686"
+              @click="openGitHub">
+              <Promotion />
+            </el-icon>
           </el-tooltip>
         </div>
       </el-header>
