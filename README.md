@@ -79,6 +79,8 @@ https://github.com/alterem/tauri-react-template
 
 ## 常见问题 (FAQ)
 
+**由于对端网站改版，现在获取教材的方法难度上升，可能需要更多的时间去分析网站数据**
+
 **Q: 在 macOS 上下载的应用无法直接打开，提示“无法验证开发者”或类似错误怎么办？**
 
 A: 这是 macOS 的 Gatekeeper 安全机制导致的。应用未经过 Apple 的开发者认证，首次打开可能会被阻止。可以在终端执行以下命令来允许应用运行：
@@ -91,7 +93,7 @@ xattr -rd com.apple.quarantine /Applications/KnowledgeGrab.app
 
 **Q: 下载时出现 403 错误怎么办？**
 
-A: 出现 403 错误通常是对端服务器的访问限制导致的。目前暂时没有有效的解决办法。
+A: 出现 403 通常是由于对端服务器禁止了这个资源的访问。
 
 ## 参与贡献
 

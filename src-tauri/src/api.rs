@@ -1,7 +1,9 @@
 use crate::models::{DataVersion, DropdownOption, TagApiResponse, TagChild, Textbook};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use once_cell::sync::Lazy;
 use reqwest;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::command;
 
 const DATA_VERSION_URL: &str =
@@ -15,6 +17,9 @@ const DOWNLOAD_URL_FORMAT: &str =
 
 const SPECIAL_EDUCATION: &str = "特殊教育";
 const HIGH_SCHOOL: &str = "高中";
+
+static TCH_MATERIAL_TAG_CACHE: Lazy<Mutex<Option<HashMap<String, TagChild>>>> =
+    Lazy::new(|| Mutex::new(None));
 
 struct HierarchyNavigator<'a> {
     tag_hierarchy: &'a HashMap<String, TagChild>,
@@ -503,6 +508,14 @@ pub async fn fetch_data_version() -> Result<serde_json::Value, String> {
 
 #[command]
 pub async fn fetch_tch_material_tag() -> Result<HashMap<String, TagChild>, String> {
+    {
+        let cache = TCH_MATERIAL_TAG_CACHE.lock().unwrap();
+        if let Some(cached_data) = cache.as_ref() {
+            println!("Using cached textbook material tags data");
+            return Ok(cached_data.clone());
+        }
+    }
+
     println!(
         "Fetching and parsing textbook material tags from: {}",
         TCH_MATERIAL_TAG_URL
@@ -536,7 +549,21 @@ pub async fn fetch_tch_material_tag() -> Result<HashMap<String, TagChild>, Strin
 
     let parsed_hierarchy = crate::models::parse_hierarchies_recursive(Some(hierarchies_to_parse));
 
+    {
+        let mut cache = TCH_MATERIAL_TAG_CACHE.lock().unwrap();
+        *cache = Some(parsed_hierarchy.clone());
+        println!("Cached textbook material tags data for future use");
+    }
+
     Ok(parsed_hierarchy)
+}
+
+#[command]
+pub async fn clear_tch_material_tag_cache() -> Result<(), String> {
+    let mut cache = TCH_MATERIAL_TAG_CACHE.lock().unwrap();
+    *cache = None;
+    println!("Cleared textbook material tags cache");
+    Ok(())
 }
 
 pub async fn fetch_and_parse_data_version() -> Result<DataVersion, String> {

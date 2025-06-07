@@ -1,15 +1,18 @@
 <template>
-  <div class="max-h-[calc(100vh-100px)] text-left" :style="{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }">
+  <div class="max-h-[calc(100vh-100px)] text-left"
+    :style="{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }">
     <div class="text-3xl font-bold mb-6">使用帮助</div>
-    
+
     <div class="mb-8">
       <div class="text-2xl font-semibold mb-3">项目概述</div>
-      <p class="mb-4">国家中小学智慧教育平台资源下载工具是一款专为教育工作者、学生和家长设计的桌面应用程序，旨在简化国家中小学智慧教育平台上教育资源的获取和管理过程。该工具提供了直观的用户界面，支持按学科、版本和年级筛选教材，并提供单本下载和批量下载功能，让用户能够轻松获取所需的教育资源。</p>
+      <p class="mb-4">
+        国家中小学智慧教育平台资源下载工具是一款专为教育工作者、学生和家长设计的桌面应用程序，旨在简化国家中小学智慧教育平台上教育资源的获取和管理过程。该工具提供了直观的用户界面，支持按学科、版本和年级筛选教材，并提供单本下载和批量下载功能，让用户能够轻松获取所需的教育资源。
+      </p>
     </div>
-    
+
     <div class="mb-8">
       <div class="text-2xl font-semibold mb-3">主要功能</div>
-      
+
       <div class="mb-4">
         <div class="text-lg font-medium mb-2">1. 教材资源浏览与筛选</div>
         <ul class="list-none pl-6 mb-3">
@@ -18,7 +21,7 @@
           <li>搜索功能：支持关键词搜索，快速定位特定教材</li>
         </ul>
       </div>
-      
+
       <div class="mb-4">
         <div class="text-lg font-medium mb-2">2. 下载管理</div>
         <ul class="list-none pl-6 mb-3">
@@ -28,7 +31,7 @@
           <li>下载状态追踪：清晰显示每本教材的下载状态</li>
         </ul>
       </div>
-      
+
       <div class="mb-4">
         <div class="text-lg font-medium mb-2">3. 系统设置</div>
         <ul class="list-none pl-6 mb-3">
@@ -39,10 +42,10 @@
         </ul>
       </div>
     </div>
-    
+
     <div class="mb-8">
       <div class="text-2xl font-semibold mb-3">使用指南</div>
-      
+
       <div class="mb-4">
         <div class="text-lg font-medium mb-2">第一步：设置应用</div>
         <p class="mb-2">首次使用前，请先进入"设置"页面：</p>
@@ -52,7 +55,7 @@
           <li>输入 API 令牌：如需访问特定资源，请输入有效的 API 令牌</li>
         </ol>
       </div>
-      
+
       <div class="mb-4">
         <div class="text-lg font-medium mb-2">第二步：浏览和筛选教材</div>
         <ol class="list-decimal pl-6 mb-3">
@@ -61,7 +64,7 @@
           <li>浏览教材列表，查看封面和详细信息</li>
         </ol>
       </div>
-      
+
       <div class="mb-4">
         <div class="text-lg font-medium mb-2">第三步：下载教材</div>
         <ol class="list-decimal pl-6 mb-3">
@@ -72,10 +75,10 @@
         </ol>
       </div>
     </div>
-    
+
     <div class="mb-8">
       <div class="text-2xl font-semibold mb-3">常见问题</div>
-      
+
       <div class="mb-3">
         <div class="text-lg font-medium mb-2">下载速度慢怎么办？</div>
         <p>可以尝试以下方法：</p>
@@ -85,7 +88,7 @@
           <li>选择网络较好的时间段下载</li>
         </ul>
       </div>
-      
+
       <div class="mb-3">
         <div class="text-lg font-medium mb-2">下载失败如何处理？</div>
         <p>下载失败时，可以：</p>
@@ -95,7 +98,7 @@
           <li>重新点击下载按钮尝试下载</li>
         </ul>
       </div>
-      
+
       <div class="mb-3">
         <div class="text-lg font-medium mb-2">找不到特定教材怎么办？</div>
         <p>可以尝试：</p>
@@ -106,7 +109,7 @@
         </ul>
       </div>
     </div>
-    
+
     <div class="mb-8">
       <div class="text-2xl font-semibold mb-3">免责声明</div>
       <div>
@@ -117,7 +120,7 @@
         <p>使用本应用即表示您同意本免责声明的所有条款和条件。</p>
       </div>
     </div>
-    
+
     <div>
       <div class="text-2xl font-semibold mb-3">联系与支持</div>
       <p class="mb-4">如果您在使用过程中遇到任何问题，或有任何建议和反馈，请通过以下方式联系我们：</p>
@@ -128,11 +131,10 @@
       </ul>
       <p class="mt-4">我们将持续改进应用，为您提供更好的教育资源获取体验。</p>
     </div>
+    <div class="pt-4"></div>
   </div>
 </template>
 
-<style scoped>
-
-</style>
+<style scoped></style>
 <script setup lang="ts">
 </script>
