@@ -101,9 +101,6 @@ A: 出现 403 通常是由于对端服务器禁止了这个资源的访问。
 
 ## 🏢 赞助
 
-感谢以下赞助商支持 XUGOU 的开发：
-
-[![Powered by DartNode](https://dartnode.com/branding/DN-Open-Source-sm.png)](https://dartnode.com "Powered by DartNode - Free VPS for Open Source")
 
 ## 开源许可
 
