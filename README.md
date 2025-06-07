@@ -97,6 +97,11 @@ A: 出现 403 错误通常是对端服务器的访问限制导致的。目前暂
 
 欢迎提交 Issue 或 Pull Request。
 
+## 🏢 赞助
+
+感谢以下赞助商支持 XUGOU 的开发：
+
+[![Powered by DartNode](https://dartnode.com/branding/DN-Open-Source-sm.png)](https://dartnode.com "Powered by DartNode - Free VPS for Open Source")
 
 ## 开源许可
 
