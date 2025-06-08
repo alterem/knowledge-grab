@@ -105,3 +105,7 @@ A: 出现 403 通常是由于对端服务器禁止了这个资源的访问。
 
 本项目采用 [MIT 许可协议](LICENSE)。
 
+
+## Stargazers over time
+
+![Stargazers over time](https://starchart.cc/alterem/knowledge-grab.svg?variant=adaptive)
