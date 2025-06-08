@@ -17,7 +17,7 @@ https://github.com/alterem/tauri-vue-template/tree/naiveui
 
 #### Vue + Element Plus
 
-https://github.com/alterem/tauri-vue-template/tree/naiveui
+https://github.com/alterem/tauri-vue-template
 
 #### React + Ant Design
 
