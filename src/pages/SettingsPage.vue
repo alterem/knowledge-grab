@@ -74,25 +74,10 @@ const LOCAL_STORAGE_THREAD_COUNT_KEY = 'thread_count';
 const LOCAL_STORAGE_SAVE_BY_CATEGORY_KEY = 'save_by_category';
 
 onMounted(() => {
-  const savedToken = localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY);
-  if (savedToken) {
-    apiToken.value = savedToken;
-  }
-
-  const savedDownloadPath = localStorage.getItem(LOCAL_STORAGE_DOWNLOAD_PATH_KEY);
-  if (savedDownloadPath) {
-    downloadPath.value = savedDownloadPath;
-  }
-
-  const savedThreadCount = localStorage.getItem(LOCAL_STORAGE_THREAD_COUNT_KEY);
-  if (savedThreadCount) {
-    threadCount.value = parseInt(savedThreadCount, 10);
-  }
-
-  const savedSaveByCategory = localStorage.getItem(LOCAL_STORAGE_SAVE_BY_CATEGORY_KEY);
-  if (savedSaveByCategory !== null) {
-    saveByCategory.value = savedSaveByCategory === 'true';
-  }
+  apiToken.value = localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY) || '';
+  downloadPath.value = localStorage.getItem(LOCAL_STORAGE_DOWNLOAD_PATH_KEY) || '';
+  threadCount.value = parseInt(localStorage.getItem(LOCAL_STORAGE_THREAD_COUNT_KEY) || '4', 10);
+  saveByCategory.value = localStorage.getItem(LOCAL_STORAGE_SAVE_BY_CATEGORY_KEY) === 'true';
 });
 
 const selectDownloadPath = async () => {
@@ -123,12 +108,10 @@ const clearCache = async () => {
     await invoke('clear_tch_material_tag_cache');
     ElMessage.success('标签缓存已清理');
   } catch (error) {
-    if (error === 'cancel') {
-      // 用户取消操作，不显示错误信息
-      return;
+    if (error !== 'cancel') {
+      console.error('清理缓存失败:', error);
+      ElMessage.error('清理缓存失败: ' + error);
     }
-    console.error('清理缓存失败:', error);
-    ElMessage.error('清理缓存失败: ' + error);
   } finally {
     clearingCache.value = false;
   }
