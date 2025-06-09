@@ -1,3 +1,6 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use tauri::{LogicalSize, Manager};
 use tauri_plugin_dialog::init as dialog_init;
 use tauri_plugin_fs::init as fs_init;
@@ -6,7 +9,6 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
 
-#[cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #[derive(Debug)]
 pub struct AppState {
     pub cached_category_id: Mutex<Option<String>>,
