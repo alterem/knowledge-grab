@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, onUnmounted, onMounted, provide } from 'vue';
-import { ElContainer, ElHeader, ElAside, ElMain } from 'element-plus';
+import { ElContainer, ElHeader, ElAside, ElMain, ElMessage } from 'element-plus';
 import { Sunny, Moon, QuestionFilled, Promotion } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 const router = useRouter();
 
@@ -62,7 +63,12 @@ const toggleTheme = () => {
 provide('isDarkMode', isDarkMode);
 provide('toggleTheme', toggleTheme);
 
-onMounted(() => {
+// Login window (opened from Settings) reports its captured token here. Handled
+// at app level so the token is persisted even if the user navigates away from
+// the Settings page while the login window is open.
+let unlistenTokenCaptured: UnlistenFn | null = null;
+
+onMounted(async () => {
   const savedTheme = localStorage.getItem('theme');
   if (savedTheme === 'dark') {
     isDarkMode.value = true;
@@ -73,6 +79,13 @@ onMounted(() => {
   }
   document.addEventListener('contextmenu', handleRightClick);
   window.addEventListener('keydown', handleKeydown);
+
+  unlistenTokenCaptured = await listen<{ token: string }>('access-token-captured', (event) => {
+    const token = event.payload?.token;
+    if (!token) return;
+    localStorage.setItem('api_token', token);
+    ElMessage.success('已自动获取 Access Token 并保存');
+  });
 });
 
 const handleRightClick = (event: MouseEvent) => {
@@ -93,6 +106,8 @@ onUnmounted(() => {
   stopDragging();
   document.removeEventListener('contextmenu', handleRightClick);
   window.removeEventListener('keydown', handleKeydown);
+  unlistenTokenCaptured?.();
+  unlistenTokenCaptured = null;
 });
 
 </script>
@@ -136,7 +151,7 @@ onUnmounted(() => {
         <div class="w-1 cursor-ew-resize bg-gray-300 hover:bg-blue-500 transition-colors duration-200"
           @mousedown="startDragging"></div>
 
-        <el-main class="p-0 flex-1 overflow-y-auto" :style="{ backgroundColor: 'var(--bg-color)' }">
+        <el-main class="p-0 flex-1 overflow-y-auto relative" :style="{ backgroundColor: 'var(--bg-color)' }">
           <router-view></router-view>
         </el-main>
       </el-container>

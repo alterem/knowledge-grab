@@ -282,6 +282,7 @@ fn main() {
             app_lib::api::fetch_textbook_categories,
             app_lib::api::fetch_image,
             app_lib::api::clear_tch_material_tag_cache,
+            app_lib::login::open_login_window,
             open_download_folder_prompt,
             open_url
         ])

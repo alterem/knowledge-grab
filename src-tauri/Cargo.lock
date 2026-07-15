@@ -124,6 +124,7 @@ dependencies = [
  "futures-util",
  "log",
  "once_cell",
+ "percent-encoding",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

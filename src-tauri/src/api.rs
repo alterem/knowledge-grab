@@ -204,6 +204,45 @@ async fn fetch_statistics(book_ids: &[String]) -> HashMap<String, serde_json::Va
     statistics_map
 }
 
+/// Picks the freshest cover image for a book.
+///
+/// `custom_properties.thumbnails` is a *separately uploaded* image that can lag
+/// the source PDF by years — some books still carry a `.pkg/thumbnails` scan of
+/// a previous edition (e.g. a 2012 cover for a book whose current PDF is the
+/// 2024 edition). `custom_properties.preview` holds the page images transcoded
+/// from the *current* PDF, so its first slide (page 1 = front cover) always
+/// matches what the user will actually download. Prefer that, and fall back to
+/// the uploaded thumbnail only when no preview is available.
+fn select_cover_url(cp: &crate::models::CustomProperties) -> String {
+    if let Some(url) = first_preview_slide(cp) {
+        return url;
+    }
+    cp.thumbnails
+        .as_ref()
+        .and_then(|thumbs| thumbs.first())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Returns the lowest-numbered `preview` slide URL (`{"Slide1": "...", ...}`),
+/// which is page 1 of the transcoded PDF — the front cover.
+fn first_preview_slide(cp: &crate::models::CustomProperties) -> Option<String> {
+    let object = cp.preview.as_ref()?.as_object()?;
+    object
+        .iter()
+        .filter_map(|(key, value)| {
+            // Keys look like "Slide1", "Slide2", ...; extract the trailing number.
+            let n: u32 = key
+                .trim_start_matches(|c: char| !c.is_ascii_digit())
+                .parse()
+                .ok()?;
+            let url = value.as_str()?;
+            (!url.is_empty()).then(|| (n, url.to_string()))
+        })
+        .min_by_key(|(n, _)| *n)
+        .map(|(_, url)| url)
+}
+
 fn convert_to_textbooks(
     raw_books: Vec<&crate::models::RawBook>,
     statistics: &HashMap<String, serde_json::Value>,
@@ -221,9 +260,7 @@ fn convert_to_textbooks(
             let cover_url = raw_book
                 .custom_properties
                 .as_ref()
-                .and_then(|cp| cp.thumbnails.as_ref())
-                .and_then(|thumbs| thumbs.first())
-                .cloned()
+                .map(select_cover_url)
                 .unwrap_or_default();
 
             Textbook {
