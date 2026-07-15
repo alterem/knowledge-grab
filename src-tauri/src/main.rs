@@ -7,34 +7,6 @@ use tauri_plugin_fs::init as fs_init;
 
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
-
-#[derive(Debug)]
-pub struct AppState {
-    pub cached_category_id: Mutex<Option<String>>,
-}
-
-impl AppState {
-    pub fn new() -> Self {
-        Self {
-            cached_category_id: Mutex::new(None),
-        }
-    }
-
-    pub fn get_cached_category_id(&self) -> Option<String> {
-        self.cached_category_id.lock().unwrap().clone()
-    }
-
-    pub fn set_cached_category_id(&self, category_id: Option<String>) {
-        *self.cached_category_id.lock().unwrap() = category_id;
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 mod constants {
     pub const APP_VERSION: &str = "1.0.0";
@@ -282,8 +254,6 @@ fn handle_menu_event(event_id: &str) {
 
 fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     setup_window(app)?;
-
-    app.manage(AppState::new());
 
     log::info!("应用程序设置完成");
     Ok(())

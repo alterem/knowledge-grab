@@ -8,7 +8,6 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "dialog:default",
     "fs:default"
   ]
 }

@@ -30,14 +30,12 @@ const menuItems = ref([
 const activeIndex = computed(() => {
   const currentPath = route.path;
   const currentQuery = route.query;
-  console.log('Computing activeIndex for path:', currentPath, 'and query:', currentQuery);
 
   if (currentPath === '/textbook-download' && currentQuery.category) {
     const textbookItem = menuItems.value.find(item => item.index === '1');
     if (textbookItem && textbookItem.children) {
       const matchedChild = textbookItem.children.find((child: any) => child.value === currentQuery.category);
       if (matchedChild) {
-        console.log('Matched nested item:', matchedChild.index);
         return matchedChild.index;
       }
     }
@@ -45,7 +43,6 @@ const activeIndex = computed(() => {
 
   const matchedItem = menuItems.value.find(item => item.path === currentPath);
   if (matchedItem) {
-    console.log('Matched top-level item:', matchedItem.index);
     return matchedItem.index;
   }
 
@@ -53,7 +50,6 @@ const activeIndex = computed(() => {
 });
 
 const handleSelect = (index: string) => {
-  console.log('Selected menu item:', index);
   let selectedItem: any = null;
 
   selectedItem = menuItems.value.find(item => item.index === index);
@@ -69,15 +65,12 @@ const handleSelect = (index: string) => {
     nextTick(() => {
       router.push(selectedItem.path);
     });
-  } else {
-    console.log('Selected item without a path or unhandled index:', index);
   }
 };
 
 onMounted(async () => {
   try {
     const categories = await invoke('fetch_textbook_categories') as DropdownOption[];
-    console.log('Fetched textbook categories:', categories);
 
     const textbookItem = menuItems.value.find(item => item.index === '1');
 

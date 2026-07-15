@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElButton, ElProgress, ElMessage } from 'element-plus';
 import { Download, Picture, Check, Close, StarFilled, View } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { useDownload } from '@/composables/useDownloadManager';
 
 const props = defineProps<{
   textbook: {
-    id: number;
+    id: string;
     cover_url: string;
     title: string;
     total_uv: number;
@@ -21,39 +21,40 @@ const props = defineProps<{
   yearLabel: string;
 }>();
 
-const downloadStatus = ref('idle');
-const downloadProgress = ref(0);
-const downloadError = ref('');
+// Shared, reactive download state for this book's URL (see useDownloadManager).
+const download = useDownload(props.textbook.download_url);
+const downloadStatus = computed(() => download.status);
+const downloadProgress = computed(() => download.progress);
+const downloadError = computed(() => download.error);
 const coverImageSrc = ref('');
-let unlistenStatus: (() => void) | null = null;
-let unlistenProgress: (() => void) | null = null;
 
-const handleDownloadComplete = (filePath: string) => {
-  console.log('Download completed successfully to:', filePath);
-  const bookTitle = props.textbook.title;
-
-  ElMessage({
-    message: `《${bookTitle}》下载成功`,
-    type: 'success',
-    duration: 3000
-  });
-};
+// The manager updates status centrally; surface the success toast here.
+watch(
+  () => download.status,
+  (status) => {
+    if (status === 'completed') {
+      ElMessage({
+        message: `《${props.textbook.title}》下载成功`,
+        type: 'success',
+        duration: 3000,
+      });
+    }
+  }
+);
 
 const handleDownload = () => {
-  console.log('Download:', props.textbook.download_url);
   const apiToken = localStorage.getItem('api_token');
   const downloadPath = localStorage.getItem('download_path');
 
   if (!downloadPath) {
-    console.error('Download path is not set.');
-    downloadStatus.value = 'failed';
-    downloadError.value = '下载路径未设置';
+    download.status = 'failed';
+    download.error = '下载路径未设置';
     return;
   }
 
-  downloadStatus.value = 'downloading';
-  downloadProgress.value = 0;
-  downloadError.value = '';
+  download.status = 'downloading';
+  download.progress = 0;
+  download.error = '';
 
   const saveByCategorySetting = localStorage.getItem('save_by_category') === 'true';
 
@@ -72,25 +73,21 @@ const handleDownload = () => {
     textbookInfo: textbookInfo,
     token: apiToken,
     downloadPath: downloadPath,
-  }).then(resp => {
-    console.log(resp);
   }).catch(error => {
     console.error('Download failed:', error);
   });
 };
 
 const handleCancel = () => {
-  console.log('Cancel download:', props.textbook.download_url);
   invoke('cancel_download', { url: props.textbook.download_url })
     .then(() => {
-      downloadStatus.value = 'idle';
-      downloadProgress.value = 0;
-      downloadError.value = '';
-      console.log('Download cancelled successfully.');
+      download.status = 'idle';
+      download.progress = 0;
+      download.error = '';
     })
     .catch(error => {
       console.error('Failed to cancel download:', error);
-      downloadError.value = '取消下载失败';
+      download.error = '取消下载失败';
     });
 };
 
@@ -106,54 +103,8 @@ const fetchCoverImage = async () => {
   }
 };
 
-onMounted(async () => {
+onMounted(() => {
   fetchCoverImage();
-  try {
-    unlistenStatus = await listen('download-status', (event: { payload: any }) => {
-      console.log('TextbookItem download-status event received:', event.payload);
-      const payload = event.payload;
-
-      if (payload.url === props.textbook.download_url) {
-        downloadStatus.value = payload.status;
-        downloadProgress.value = payload.progress || 0;
-
-        switch (payload.status) {
-          case 'failed':
-            downloadError.value = payload.error || '未知错误';
-            break;
-          case 'completed':
-            handleDownloadComplete(payload.filePath);
-            break;
-          case 'cancelled':
-            downloadStatus.value = 'idle';
-            downloadProgress.value = 0;
-            downloadError.value = '下载已取消';
-            break;
-        }
-      }
-    });
-
-    unlistenProgress = await listen('download-progress', (event: { payload: any }) => {
-      const payload = event.payload;
-
-      if (payload.url === props.textbook.download_url) {
-        downloadProgress.value = Math.min(Math.max(0, payload.progress), 100);
-      }
-    });
-  } catch (error) {
-    console.error('Error setting up event listeners:', error);
-    downloadStatus.value = 'failed';
-    downloadError.value = '无法设置下载监听器';
-  }
-});
-
-onUnmounted(() => {
-  if (unlistenStatus) {
-    unlistenStatus();
-  }
-  if (unlistenProgress) {
-    unlistenProgress();
-  }
 });
 </script>
 

@@ -2,7 +2,6 @@ use crate::models::TextbookDownloadInfo;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
-use reqwest;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,6 +15,8 @@ use url::Url;
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 const PROGRESS_UPDATE_THRESHOLD: u64 = 1024 * 1024; // 1MB
+
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
 pub static DOWNLOAD_TOKENS: Lazy<Arc<Mutex<HashMap<String, CancellationToken>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
@@ -92,7 +93,7 @@ impl DownloadEventEmitter {
 
 fn extract_file_extension(url: &Url) -> String {
     url.path_segments()
-        .and_then(|segments| segments.last())
+        .and_then(|mut segments| segments.next_back())
         .and_then(|segment| segment.rsplit('.').next())
         .filter(|ext| !ext.is_empty())
         .map(|ext| format!(".{}", ext))
@@ -121,12 +122,8 @@ fn build_save_path(textbook_info: &TextbookDownloadInfo, download_path: &str) ->
     base_save_path
 }
 
-fn create_request(
-    client: &reqwest::Client,
-    url: &Url,
-    token: Option<&str>,
-) -> reqwest::RequestBuilder {
-    let mut request = client.get(url.clone());
+fn create_request(url: &Url, token: Option<&str>) -> reqwest::RequestBuilder {
+    let mut request = HTTP_CLIENT.get(url.clone());
     request = request.header(reqwest::header::USER_AGENT, USER_AGENT);
 
     if let Some(t) = token {
@@ -186,7 +183,7 @@ async fn process_download_stream(
         downloaded_size += chunk_size;
 
         if downloaded_size - last_progress_update >= PROGRESS_UPDATE_THRESHOLD
-            || total_size.map_or(false, |total| downloaded_size >= total)
+            || total_size.is_some_and(|total| downloaded_size >= total)
         {
             let progress = calculate_progress(downloaded_size, total_size);
             emitter.emit_progress(progress);
@@ -261,8 +258,7 @@ pub async fn download_textbook_internal(
     let emitter = DownloadEventEmitter::new(app_handle, url.clone());
     emitter.emit_status(DownloadStatus::Downloading, 0);
 
-    let client = reqwest::Client::new();
-    let request = create_request(&client, &parsed_url, token.as_deref());
+    let request = create_request(&parsed_url, token.as_deref());
 
     let response = request.send().await.map_err(|e| {
         let error_msg = format!("Download failed: {}", e);

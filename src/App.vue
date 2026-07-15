@@ -46,10 +46,6 @@ const stopDragging = () => {
   document.removeEventListener('mouseup', stopDragging);
 };
 
-onUnmounted(() => {
-  stopDragging();
-});
-
 const isDarkMode = ref(false);
 
 const toggleTheme = () => {
@@ -76,15 +72,27 @@ onMounted(() => {
     document.documentElement.classList.remove('dark');
   }
   document.addEventListener('contextmenu', handleRightClick);
+  window.addEventListener('keydown', handleKeydown);
 });
 
 const handleRightClick = (event: MouseEvent) => {
   event.preventDefault();
 };
 
+// macOS 惯例：Command + , 打开设置页面
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.metaKey && event.key === ',') {
+    event.preventDefault();
+    if (router.currentRoute.value.path !== '/settings') {
+      router.push('/settings');
+    }
+  }
+};
+
 onUnmounted(() => {
   stopDragging();
   document.removeEventListener('contextmenu', handleRightClick);
+  window.removeEventListener('keydown', handleKeydown);
 });
 
 </script>

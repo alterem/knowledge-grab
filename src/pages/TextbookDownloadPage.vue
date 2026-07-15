@@ -26,9 +26,8 @@ const breadcrumbItems = computed(() => {
 });
 
 
-let unlistenStatus: (() => void) | null = null;
-let unlistenProgress: (() => void) | null = null;
 let unlistenBatchCompleted: (() => void) | null = null;
+let unlistenBatchFailed: (() => void) | null = null;
 
 const subject = ref('');
 const version = ref('');
@@ -41,7 +40,7 @@ const grades = ref<DropdownOption[]>([]);
 const years = ref<DropdownOption[]>([]);
 
 interface Textbook {
-  id: number;
+  id: string;
   cover_url: string;
   title: string;
   total_uv: number;
@@ -59,14 +58,12 @@ const textbooks = ref<Textbook[]>([]);
 const isLoading = ref(false);
 
 const handleBatchDownload = () => {
-  console.log('Batch Download clicked');
   const apiToken = localStorage.getItem('api_token');
   const downloadPath = localStorage.getItem('download_path');
   const threadCount = localStorage.getItem('thread_count') ? parseInt(localStorage.getItem('thread_count')!, 10) : 4;
   const saveByCategorySetting = localStorage.getItem('save_by_category') === 'true';
 
   if (!downloadPath) {
-    console.error('Download path is not set.');
     ElMessage.warning('下载路径没有设置，前往设置页面设置下载路径后继续')
     return;
   }
@@ -93,8 +90,6 @@ const handleBatchDownload = () => {
     token: apiToken,
     downloadPath: downloadPath,
     threadCount: threadCount,
-  }).then(() => {
-    console.log('Batch download command sent to backend.');
   }).catch(error => {
     console.error('Failed to start batch download:', error);
     ElMessage.error('下载错误' + error)
@@ -102,39 +97,11 @@ const handleBatchDownload = () => {
 };
 
 async function setupTauriListeners() {
-  console.log('Attempting to set up Tauri listeners...');
   try {
-    console.log('Setting up initial listeners...');
-    console.log('Setting up download-status listener...');
-    unlistenStatus = await listen('download-status', (event: { payload: any }) => {
-      console.log('Download status event received:', event.payload);
-      const payload = event.payload;
-      const relatedTextbook = textbooks.value.find(tb => tb.download_url === payload.url);
-      if (relatedTextbook) {
-        if (payload.status === 'completed' || payload.status === 'failed') {
-          console.log(`Download status for ${payload.url}: ${payload.status}`);
-        }
-      }
-    });
-    console.log('Download status listener registered.');
-    console.log('Setting up download-progress listener...');
-    unlistenProgress = await listen('download-progress', (event: { payload: any }) => {
-      console.log('Download progress event received:', event.payload);
-      const payload = event.payload;
-      const relatedTextbook = textbooks.value.find(tb => tb.download_url === payload.url);
-      if (relatedTextbook) {
-        console.log(`Download progress for ${payload.url}: ${payload.progress}%`);
-      }
-    });
-    console.log('Download progress listener registered.');
-    console.log('Setting up batch-download-completed listener...');
     unlistenBatchCompleted = await listen('batch-download-completed', (event: {
       payload: { downloadPath: string }
     }) => {
-      console.log('RECEIVED batch-download-completed event:', event);
-      console.log('Batch download completed event payload:', event.payload);
       const downloadPath = event.payload.downloadPath;
-      console.log('Batch download completed. Download path:', downloadPath);
       ElMessage.success('批量下载完成！');
       ElMessageBox.confirm(
         '下载已完成，是否打开下载文件夹？',
@@ -146,28 +113,19 @@ async function setupTauriListeners() {
         }
       )
         .then(() => {
-          console.log('User confirmed to open download folder');
           invoke('open_download_folder_prompt', { downloadPath })
-            .then(() => console.log('Open download folder command sent'))
             .catch(err => console.error('Failed to open download folder:', err));
         })
         .catch(() => {
-          console.log('User chose not to open download folder');
+          /* user declined */
         });
     });
-    console.log('Batch download completed listener registered successfully.');
-    console.log('Setting up batch-download-failed listener...');
-    await listen('batch-download-failed', (event: { payload: { downloadPath: string } }) => {
-      console.log('Batch download failed event received:', event.payload);
-      const downloadPath = event.payload.downloadPath;
-      console.log('Some batch downloads failed. Download path:', downloadPath);
+
+    unlistenBatchFailed = await listen('batch-download-failed', () => {
       ElMessage.error('部分文件下载失败，请检查网络连接后重试。');
     });
-    console.log('Batch download failed listener registered.');
-
   } catch (error) {
     console.error('Error setting up Tauri listeners:', error);
-    console.warn('Tauri API might not be available or there was an error during setup.');
     ElMessage.error('初始化应用程序时出错，请重启应用。');
   }
 }
@@ -186,24 +144,18 @@ const gradeLabel = computed(() => isSpecialEducationCategory.value ? '学科' : 
 const yearLabel = computed(() => '年级');
 
 const isGradeDropdownVisible = computed(() => {
-  const isVisible = !!subject.value && !!version.value && (isSpecialEducationCategory.value || !isHighSchoolCategory.value);
-  console.log('isGradeDropdownVisible changed:', isVisible);
-  return isVisible;
+  return !!subject.value && !!version.value && (isSpecialEducationCategory.value || !isHighSchoolCategory.value);
 });
 
 const isYearDropdownVisible = computed(() => {
-  const isVisible = isSpecialEducationCategory.value && !!subject.value && !!version.value && !!grade.value;
-  console.log('isYearDropdownVisible changed:', isVisible);
-  return isVisible;
+  return isSpecialEducationCategory.value && !!subject.value && !!version.value && !!grade.value;
 });
 
 const fetchFilterOptions = async (args: any, targetRef: Ref<DropdownOption[]>) => {
   try {
-    console.log('Fetching filter options with args:', args);
     const options = await invoke<DropdownOption[]>('fetch_filter_options', { args });
     const filteredOptions = options ? options.filter(cat => !(cat.value === "267a11ad-0a45-4d3e-a95b-423fc3e959af" && cat.label === "培智学校")) : [];
     targetRef.value = filteredOptions.sort((a, b) => a.label.localeCompare(b.label));
-    console.log('Fetched options:', targetRef.value);
   } catch (error) {
     console.error('Failed to fetch filter options:', error);
     ElMessage.error('获取筛选信息出错');
@@ -247,7 +199,6 @@ const isBreadcrumbSingleLevel = computed(() => {
 });
 
 watch(() => route.query.category, (newCategory) => {
-  console.log('Category query changed:', newCategory);
   textbooks.value = [];
   if (newCategory) {
     fetchFirstFilterOptions(newCategory as string);
@@ -264,7 +215,6 @@ watch(() => route.query.category, (newCategory) => {
 });
 
 watch(() => subject.value, (newSubject) => {
-  console.log('First filter (subject) changed:', newSubject);
   if (newSubject && route.query.category) {
     fetchSecondFilterOptions(route.query.category as string, newSubject);
   } else {
@@ -278,7 +228,6 @@ watch(() => subject.value, (newSubject) => {
 });
 
 watch(() => version.value, (newVersion) => {
-  console.log('Second filter (version) changed:', newVersion);
   if (newVersion && route.query.category && subject.value) {
     fetchThirdFilterOptions(route.query.category as string, subject.value, newVersion);
   } else {
@@ -290,7 +239,6 @@ watch(() => version.value, (newVersion) => {
 });
 
 watch(() => grade.value, (newGrade) => {
-  console.log('Third filter (grade) changed:', newGrade);
   if (isSpecialEducationCategory.value && newGrade && route.query.category && subject.value && version.value) {
     fetchFourthFilterOptions(route.query.category as string, subject.value, version.value, newGrade);
   } else {
@@ -301,16 +249,13 @@ watch(() => grade.value, (newGrade) => {
 
 
 onMounted(async () => {
-  console.log('TextbookDownloadPage mounted, setting up listeners...');
   setupTauriListeners();
 
   try {
     textbookCategories.value = await invoke('fetch_textbook_categories') as DropdownOption[];
-    console.log('Fetched textbook categories for breadcrumb:', textbookCategories.value);
     const specialEducationCategory = textbookCategories.value.find(cat => cat.label === '特殊教育');
     if (specialEducationCategory) {
       specialEducationCategoryValue.value = specialEducationCategory.value;
-      console.log('Special Education Category Value:', specialEducationCategoryValue.value);
     }
   } catch (error) {
     console.error('Error fetching textbook categories for breadcrumb:', error);
@@ -323,50 +268,30 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  console.log('TextbookDownloadPage unmounting, cleaning up listeners...');
-  if (unlistenStatus) {
-    unlistenStatus();
-    console.log('Download status listener cleaned up');
-  }
-  if (unlistenProgress) {
-    unlistenProgress();
-    console.log('Download progress listener cleaned up');
-  }
-  if (unlistenBatchCompleted) {
-    unlistenBatchCompleted();
-    console.log('Batch download completed listener cleaned up');
-  }
+  unlistenBatchCompleted?.();
+  unlistenBatchFailed?.();
 });
 
 const handleSearch = async () => {
-  console.log('Search clicked with filters:', subject.value, version.value, grade.value, year.value);
-    isLoading.value = true;
-    try {
-      console.log('Fetching textbooks with filters:', {
-        category_id: route.query.category as string,
-        subject: subject.value,
-        version: version.value,
-        grade: grade.value,
-        year: year.value,
-      });
-      const fetchedTextbooks = await invoke<Textbook[]>('fetch_textbooks', {
-        categoryId: route.query.category as string,
-        subjectId: subject.value,
-        versionId: version.value,
-        gradeId: grade.value,
-        ...(isSpecialEducationCategory.value && year.value && { yearId: year.value }),
-      }) as Textbook[];
-      textbooks.value = fetchedTextbooks;
-      console.log('Fetched textbooks:', textbooks.value);
-      if (textbooks.value.length === 0) {
-        ElMessage.info('获取到数据为空');
-      }
-    } catch (error) {
-      console.error('Failed to fetch textbooks:', error);
-      ElMessage.error('Failed to fetch textbooks:' + error)
-    } finally {
-      isLoading.value = false;
+  isLoading.value = true;
+  try {
+    const fetchedTextbooks = await invoke<Textbook[]>('fetch_textbooks', {
+      categoryId: route.query.category as string,
+      subjectId: subject.value,
+      versionId: version.value,
+      gradeId: grade.value,
+      ...(isSpecialEducationCategory.value && year.value && { yearId: year.value }),
+    }) as Textbook[];
+    textbooks.value = fetchedTextbooks;
+    if (textbooks.value.length === 0) {
+      ElMessage.info('获取到数据为空');
     }
+  } catch (error) {
+    console.error('Failed to fetch textbooks:', error);
+    ElMessage.error('Failed to fetch textbooks:' + error)
+  } finally {
+    isLoading.value = false;
+  }
 };
 
 </script>

@@ -1,9 +1,8 @@
 use crate::models::{DataVersion, DropdownOption, TagApiResponse, TagChild, Textbook};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use once_cell::sync::Lazy;
-use reqwest;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::command;
 
 const DATA_VERSION_URL: &str =
@@ -18,7 +17,14 @@ const DOWNLOAD_URL_FORMAT: &str =
 const SPECIAL_EDUCATION: &str = "特殊教育";
 const HIGH_SCHOOL: &str = "高中";
 
-static TCH_MATERIAL_TAG_CACHE: Lazy<Mutex<Option<HashMap<String, TagChild>>>> =
+// Statistics endpoint takes ids in the query string; batch to keep the URL length bounded.
+const STATISTICS_BATCH_SIZE: usize = 50;
+
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+
+type TagHierarchyMap = HashMap<String, TagChild>;
+
+static TCH_MATERIAL_TAG_CACHE: Lazy<Mutex<Option<Arc<TagHierarchyMap>>>> =
     Lazy::new(|| Mutex::new(None));
 
 struct HierarchyNavigator<'a> {
@@ -70,25 +76,11 @@ impl<'a> HierarchyNavigator<'a> {
         let version = self.get_version(category_id, subject_id, version_id)?;
         Self::find_child_in_hierarchies(&version.hierarchies, grade_id)
     }
-
-    fn get_year(
-        &self,
-        category_id: &str,
-        subject_id: &str,
-        version_id: &str,
-        grade_id: &str,
-        year_id: &str,
-    ) -> Option<&TagChild> {
-        let grade = self.get_grade(category_id, subject_id, version_id, grade_id)?;
-        Self::find_child_in_hierarchies(&grade.hierarchies, year_id)
-    }
 }
 
 #[derive(Debug)]
 struct ValidationResult {
     is_special_education: bool,
-    #[allow(dead_code)]
-    is_high_school: bool,
     is_valid: bool,
 }
 
@@ -102,87 +94,22 @@ fn validate_parameters(
 ) -> ValidationResult {
     let is_special_education = tag_hierarchy
         .get(category_id)
-        .map_or(false, |cat| cat.tag_name == SPECIAL_EDUCATION);
+        .is_some_and(|cat| cat.tag_name == SPECIAL_EDUCATION);
 
     let is_high_school = tag_hierarchy
         .get(category_id)
-        .map_or(false, |cat| cat.tag_name == HIGH_SCHOOL);
+        .is_some_and(|cat| cat.tag_name == HIGH_SCHOOL);
 
     let is_valid = !category_id.is_empty()
         && !subject_id.is_empty()
         && !version_id.is_empty()
-        && (!is_high_school && !grade_id.is_empty() || is_high_school)
+        && (is_high_school || !grade_id.is_empty())
         && (!is_special_education || year_id.is_some());
 
     ValidationResult {
         is_special_education,
-        is_high_school,
         is_valid,
     }
-}
-
-fn build_tag_names(
-    navigator: &HierarchyNavigator,
-    category_id: &str,
-    subject_id: &str,
-    version_id: &str,
-    grade_id: &str,
-    year_id: &Option<String>,
-    validation: &ValidationResult,
-) -> Vec<String> {
-    let mut tag_names = Vec::new();
-
-    if let Some(category) = navigator.get_category(category_id) {
-        tag_names.push(category.tag_name.clone());
-    } else {
-        println!("Category tag not found for ID: {}", category_id);
-        return tag_names;
-    }
-
-    if let Some(subject) = navigator.get_subject(category_id, subject_id) {
-        tag_names.push(subject.tag_name.clone());
-    } else {
-        println!("Subject tag not found for ID: {}", subject_id);
-        return tag_names;
-    }
-
-    if let Some(version) = navigator.get_version(category_id, subject_id, version_id) {
-        tag_names.push(version.tag_name.clone());
-    } else {
-        println!("Version tag not found for ID: {}", version_id);
-        return tag_names;
-    }
-
-    if !grade_id.is_empty() {
-        if let Some(grade) = navigator.get_grade(category_id, subject_id, version_id, grade_id) {
-            tag_names.push(grade.tag_name.clone());
-
-            if validation.is_special_education {
-                if let Some(year_id_val) = year_id {
-                    if let Some(year) = navigator.get_year(
-                        category_id,
-                        subject_id,
-                        version_id,
-                        grade_id,
-                        year_id_val,
-                    ) {
-                        tag_names.push(year.tag_name.clone());
-                    } else {
-                        println!("Year tag not found for ID: {}", year_id_val);
-                    }
-                }
-            }
-        } else {
-            let grade_type = if validation.is_special_education {
-                "学科 for SE"
-            } else {
-                "Grade"
-            };
-            println!("{} tag not found for ID: {}", grade_type, grade_id);
-        }
-    }
-
-    tag_names
 }
 
 fn build_required_id_sequence(
@@ -217,48 +144,52 @@ async fn fetch_statistics(book_ids: &[String]) -> HashMap<String, serde_json::Va
         return HashMap::new();
     }
 
-    let res_ids = book_ids.join(",");
-    let statistics_url = STATISTICS_URL_FORMAT.replace("{}", &res_ids);
+    let requests = book_ids.chunks(STATISTICS_BATCH_SIZE).map(|chunk| async move {
+        let res_ids = chunk.join(",");
+        let statistics_url = STATISTICS_URL_FORMAT.replace("{}", &res_ids);
 
-    println!("Fetching statistics from: {}", statistics_url);
+        println!("Fetching statistics from: {}", statistics_url);
 
-    let response = match reqwest::get(&statistics_url).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            eprintln!("Failed to fetch statistics: {}", e);
-            return HashMap::new();
-        }
-    };
+        let response = match HTTP_CLIENT.get(&statistics_url).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                eprintln!("Failed to fetch statistics: {}", e);
+                return Vec::new();
+            }
+        };
 
-    if !response.status().is_success() {
-        eprintln!(
-            "Failed to fetch statistics: HTTP status {}",
-            response.status()
-        );
-        return HashMap::new();
-    }
-
-    let body = match response.text().await {
-        Ok(text) => text,
-        Err(e) => {
-            eprintln!("Failed to get statistics response body: {}", e);
-            return HashMap::new();
-        }
-    };
-
-    let stats_list: Vec<serde_json::Value> = match serde_json::from_str(&body) {
-        Ok(stats) => stats,
-        Err(e) => {
+        if !response.status().is_success() {
             eprintln!(
-                "Failed to parse statistics JSON: {}. Response body: {}",
-                e, body
+                "Failed to fetch statistics: HTTP status {}",
+                response.status()
             );
-            return HashMap::new();
+            return Vec::new();
         }
-    };
+
+        let body = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("Failed to get statistics response body: {}", e);
+                return Vec::new();
+            }
+        };
+
+        match serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+            Ok(stats) => stats,
+            Err(e) => {
+                eprintln!(
+                    "Failed to parse statistics JSON: {}. Response body: {}",
+                    e, body
+                );
+                Vec::new()
+            }
+        }
+    });
+
+    let batches = futures_util::future::join_all(requests).await;
 
     let mut statistics_map = HashMap::new();
-    for stat_obj in stats_list {
+    for stat_obj in batches.into_iter().flatten() {
         if let Some(id) = stat_obj.get("id").and_then(|v| v.as_str()) {
             statistics_map.insert(id.to_string(), stat_obj);
         } else {
@@ -316,7 +247,12 @@ pub async fn fetch_textbooks(
         category_id, subject_id, version_id, grade_id, year_id
     );
 
-    let tag_hierarchy = fetch_tch_material_tag().await?;
+    // The tag hierarchy (usually cached) and the data version are independent
+    // network fetches, so run them concurrently and overlap their latency.
+    let (tag_hierarchy_res, data_version_res) =
+        tokio::join!(fetch_tch_material_tag(), fetch_and_parse_data_version());
+
+    let tag_hierarchy = tag_hierarchy_res?;
     let validation = validate_parameters(
         &category_id,
         &subject_id,
@@ -330,17 +266,6 @@ pub async fn fetch_textbooks(
         println!("One or more required parameters are empty, returning empty textbook list.");
         return Ok(vec![]);
     }
-
-    let navigator = HierarchyNavigator::new(&tag_hierarchy);
-    let _tag_names = build_tag_names(
-        &navigator,
-        &category_id,
-        &subject_id,
-        &version_id,
-        &grade_id,
-        &year_id,
-        &validation,
-    );
 
     let required_id_sequence = build_required_id_sequence(
         &category_id,
@@ -356,7 +281,7 @@ pub async fn fetch_textbooks(
         required_id_sequence
     );
 
-    let data_version = fetch_and_parse_data_version().await?;
+    let data_version = data_version_res?;
     let raw_books = fetch_raw_books(data_version).await?;
 
     let filtered_raw_books: Vec<&crate::models::RawBook> = raw_books
@@ -419,42 +344,34 @@ pub async fn fetch_filter_options(
             if let Some(subject_id) = args.subject_id {
                 if let Some(version_id) = args.version_id {
                     if let Some(grade_id) = args.grade_id {
-                        if let Some(grade) =
-                            navigator.get_grade(&cat_id, &subject_id, &version_id, &grade_id)
-                        {
-                            get_dropdown_options_from_hierarchies(&grade.hierarchies)
-                        } else {
+                        navigator
+                            .get_grade(&cat_id, &subject_id, &version_id, &grade_id)
+                            .map(|grade| get_dropdown_options_from_hierarchies(&grade.hierarchies))
+                            .unwrap_or_default()
+                    } else if let Some(subject) = navigator.get_subject(&cat_id, &subject_id) {
+                        if subject.tag_name == HIGH_SCHOOL {
+                            println!("High school subject selected, no grades available.");
                             Vec::new()
-                        }
-                    } else {
-                        if let Some(subject) = navigator.get_subject(&cat_id, &subject_id) {
-                            if subject.tag_name == HIGH_SCHOOL {
-                                println!("High school subject selected, no grades available.");
-                                Vec::new()
-                            } else if let Some(version) =
-                                navigator.get_version(&cat_id, &subject_id, &version_id)
-                            {
-                                get_dropdown_options_from_hierarchies(&version.hierarchies)
-                            } else {
-                                Vec::new()
-                            }
                         } else {
-                            Vec::new()
+                            navigator
+                                .get_version(&cat_id, &subject_id, &version_id)
+                                .map(|version| {
+                                    get_dropdown_options_from_hierarchies(&version.hierarchies)
+                                })
+                                .unwrap_or_default()
                         }
-                    }
-                } else {
-                    if let Some(subject) = navigator.get_subject(&cat_id, &subject_id) {
-                        get_dropdown_options_from_hierarchies(&subject.hierarchies)
                     } else {
                         Vec::new()
                     }
-                }
-            } else {
-                if let Some(category) = navigator.get_category(&cat_id) {
-                    get_dropdown_options_from_hierarchies(&category.hierarchies)
+                } else if let Some(subject) = navigator.get_subject(&cat_id, &subject_id) {
+                    get_dropdown_options_from_hierarchies(&subject.hierarchies)
                 } else {
                     Vec::new()
                 }
+            } else if let Some(category) = navigator.get_category(&cat_id) {
+                get_dropdown_options_from_hierarchies(&category.hierarchies)
+            } else {
+                Vec::new()
             }
         }
         None => Vec::new(),
@@ -469,10 +386,10 @@ pub async fn fetch_textbook_categories() -> Result<Vec<DropdownOption>, String> 
     let tag_hierarchy = fetch_tch_material_tag().await?;
 
     let categories = tag_hierarchy
-        .into_iter()
-        .map(|(_, tag_child)| DropdownOption {
-            value: tag_child.tag_id,
-            label: tag_child.tag_name,
+        .values()
+        .map(|tag_child| DropdownOption {
+            value: tag_child.tag_id.clone(),
+            label: tag_child.tag_name.clone(),
         })
         .collect();
 
@@ -487,7 +404,9 @@ impl DataVersion {
 
 pub async fn fetch_data_version() -> Result<serde_json::Value, String> {
     println!("Fetching filter options from: {}", DATA_VERSION_URL);
-    let response = reqwest::get(DATA_VERSION_URL)
+    let response = HTTP_CLIENT
+        .get(DATA_VERSION_URL)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch filter options: {}", e))?;
 
@@ -506,13 +425,12 @@ pub async fn fetch_data_version() -> Result<serde_json::Value, String> {
     Ok(json_value)
 }
 
-#[command]
-pub async fn fetch_tch_material_tag() -> Result<HashMap<String, TagChild>, String> {
+pub async fn fetch_tch_material_tag() -> Result<Arc<TagHierarchyMap>, String> {
     {
         let cache = TCH_MATERIAL_TAG_CACHE.lock().unwrap();
         if let Some(cached_data) = cache.as_ref() {
             println!("Using cached textbook material tags data");
-            return Ok(cached_data.clone());
+            return Ok(Arc::clone(cached_data));
         }
     }
 
@@ -520,7 +438,9 @@ pub async fn fetch_tch_material_tag() -> Result<HashMap<String, TagChild>, Strin
         "Fetching and parsing textbook material tags from: {}",
         TCH_MATERIAL_TAG_URL
     );
-    let response = reqwest::get(TCH_MATERIAL_TAG_URL)
+    let response = HTTP_CLIENT
+        .get(TCH_MATERIAL_TAG_URL)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch textbook material tags: {}", e))?;
 
@@ -545,13 +465,15 @@ pub async fn fetch_tch_material_tag() -> Result<HashMap<String, TagChild>, Strin
         .and_then(|h| h.children)
         .and_then(|children_vec| children_vec.into_iter().next())
         .and_then(|ch| ch.hierarchies)
-        .unwrap_or_else(Vec::new);
+        .unwrap_or_default();
 
-    let parsed_hierarchy = crate::models::parse_hierarchies_recursive(Some(hierarchies_to_parse));
+    let parsed_hierarchy = Arc::new(crate::models::parse_hierarchies_recursive(Some(
+        hierarchies_to_parse,
+    )));
 
     {
         let mut cache = TCH_MATERIAL_TAG_CACHE.lock().unwrap();
-        *cache = Some(parsed_hierarchy.clone());
+        *cache = Some(Arc::clone(&parsed_hierarchy));
         println!("Cached textbook material tags data for future use");
     }
 
@@ -576,7 +498,9 @@ pub async fn fetch_and_parse_data_version() -> Result<DataVersion, String> {
 #[command]
 pub async fn fetch_image(url: String) -> Result<String, String> {
     println!("Fetching image from: {}", url);
-    let response = reqwest::get(&url)
+    let response = HTTP_CLIENT
+        .get(&url)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch image: {}", e))?;
 
@@ -602,13 +526,11 @@ pub async fn fetch_raw_books(
     println!("Fetching raw book data from URLs: {:?}", data_version.urls);
     let urls = data_version.get_urls();
 
-    let client = reqwest::Client::new();
     let mut tasks = vec![];
 
     for url in urls {
-        let client = client.clone();
         tasks.push(tokio::spawn(async move {
-            let response = client
+            let response = HTTP_CLIENT
                 .get(&url)
                 .send()
                 .await
@@ -621,12 +543,10 @@ pub async fn fetch_raw_books(
                     response.status()
                 ));
             }
-            let raw_books: Vec<crate::models::RawBook> = response.json().await.map_err(|e| {
-                format!(
-                    "Failed to parse raw book data JSON from {}: {}. Error details: {:?}",
-                    url, e, e
-                )
-            })?;
+            let raw_books: Vec<crate::models::RawBook> = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse raw book data JSON from {}: {}", url, e))?;
 
             Ok(raw_books)
         }));
