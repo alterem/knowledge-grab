@@ -54,7 +54,7 @@ pub fn run() {
             api::fetch_textbooks,
             api::fetch_filter_options,
             api::fetch_textbook_categories,
-            api::fetch_image,
+            api::fetch_cover,
             api::clear_tch_material_tag_cache,
             login::open_login_window,
             system::open_download_folder_prompt,

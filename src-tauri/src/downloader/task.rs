@@ -190,10 +190,7 @@ async fn process_download_stream(
 async fn download_candidates(url: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     if let Some(id) = books::resource_id_from_url(url) {
-        match books::resolve_source_pdf_urls(id).await {
-            Ok(urls) => candidates = urls,
-            Err(e) => log::warn!("查询资源详情失败，使用默认地址: {e}"),
-        }
+        candidates = books::resolve_source_pdf_urls(id).await;
     }
     if !candidates.iter().any(|c| c == url) {
         candidates.push(url.to_string());

@@ -98,9 +98,20 @@ pub async fn clear_tch_material_tag_cache() -> Result<(), String> {
     Ok(())
 }
 
-// 封面直连会因防盗链失败，由后端代理拉取并转 base64 给前端
+// 封面直连有防盗链，由后端代理拉取并转 base64 给前端。
+// 优先用详情解析出的、与源 PDF 同批的转码首页图；详情不可用时退回目录字段选出的地址
 #[command]
-pub async fn fetch_image(url: String) -> Result<String, String> {
-    let bytes = http::get_bytes(&url).await?;
+pub async fn fetch_cover(book_id: String, fallback_url: String) -> Result<String, String> {
+    if let Some(url) = books::resolve_cover_url(&book_id).await {
+        match http::get_bytes(&url).await {
+            Ok(bytes) => return Ok(STANDARD.encode(&bytes)),
+            Err(e) => log::warn!("详情封面获取失败，使用目录封面: {e}"),
+        }
+    }
+
+    if fallback_url.is_empty() {
+        return Err("无可用封面".to_string());
+    }
+    let bytes = http::get_bytes(&fallback_url).await?;
     Ok(STANDARD.encode(&bytes))
 }

@@ -55,10 +55,11 @@ pub async fn get_raw_books() -> Result<Arc<Vec<RawBook>>, String> {
 
 pub async fn clear_cache() {
     *BOOKS_CACHE.lock().await = None;
+    DETAIL_CACHE.lock().await.clear();
 }
 
 #[derive(Debug, Deserialize)]
-struct ResourceDetail {
+pub struct ResourceDetail {
     #[serde(default)]
     ti_items: Vec<TiItem>,
 }
@@ -73,6 +74,33 @@ struct TiItem {
     ti_storages: Vec<String>,
 }
 
+// 资源详情缓存：下载与封面共用，避免重复请求
+static DETAIL_CACHE: Lazy<Mutex<HashMap<String, Arc<ResourceDetail>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+async fn get_detail(book_id: &str) -> Option<Arc<ResourceDetail>> {
+    if let Some(detail) = DETAIL_CACHE.lock().await.get(book_id) {
+        return Some(Arc::clone(detail));
+    }
+
+    let url = format!("{RESOURCE_DETAIL_URL_PREFIX}{book_id}.json");
+    match http::get_json::<ResourceDetail>(&url).await {
+        Ok(detail) => {
+            let detail = Arc::new(detail);
+            DETAIL_CACHE
+                .lock()
+                .await
+                .insert(book_id.to_string(), Arc::clone(&detail));
+            Some(detail)
+        }
+        Err(e) => {
+            // thematic_course 等包装类型没有 tch_material 详情，属预期情况
+            log::debug!("查询资源详情失败: {e}");
+            None
+        }
+    }
+}
+
 // 从下载 URL 提取资源 id（…/assets/{id}.pkg/…）
 pub fn resource_id_from_url(url: &str) -> Option<&str> {
     let rest = url.split("/assets/").nth(1)?;
@@ -80,12 +108,13 @@ pub fn resource_id_from_url(url: &str) -> Option<&str> {
     (!id.is_empty()).then_some(id)
 }
 
-// 查询资源详情，返回源 PDF 的真实地址（多个 CDN 镜像）。
+// 详情里声明的源 PDF 真实地址（多个 CDN 镜像）。
 // 部分教材（如盲校/特教）不走电子书处理管线，pkg 里没有 pdf.pdf 别名，
 // 只能按详情里声明的原始文件名下载；这也是官方阅读器的取法。
-pub async fn resolve_source_pdf_urls(resource_id: &str) -> Result<Vec<String>, String> {
-    let url = format!("{RESOURCE_DETAIL_URL_PREFIX}{resource_id}.json");
-    let detail: ResourceDetail = http::get_json(&url).await?;
+pub async fn resolve_source_pdf_urls(resource_id: &str) -> Vec<String> {
+    let Some(detail) = get_detail(resource_id).await else {
+        return Vec::new();
+    };
 
     let source = detail
         .ti_items
@@ -100,7 +129,20 @@ pub async fn resolve_source_pdf_urls(resource_id: &str) -> Result<Vec<String>, S
                 .find(|ti| ti.ti_format.as_deref() == Some("pdf"))
         });
 
-    Ok(source.map(|ti| ti.ti_storages.clone()).unwrap_or_default())
+    source.map(|ti| ti.ti_storages.clone()).unwrap_or_default()
+}
+
+// 封面取详情里的 thumbnail_1：它与源 PDF 同批转码生成，保证列表封面与下载文件一致。
+// 详情存储在鉴权私有域名上，同路径的公开域名可免鉴权访问，替换后返回
+pub async fn resolve_cover_url(book_id: &str) -> Option<String> {
+    let detail = get_detail(book_id).await?;
+    let url = detail
+        .ti_items
+        .iter()
+        .find(|ti| ti.ti_file_flag.as_deref() == Some("thumbnail_1"))?
+        .ti_storages
+        .first()?;
+    Some(url.replace("-ndr-private.", "-ndr."))
 }
 
 async fn fetch_raw_books(version: &DataVersion) -> Result<Vec<RawBook>, String> {
@@ -188,16 +230,38 @@ pub fn to_textbooks(books: Vec<&RawBook>, stats: &HashMap<String, (i64, i64)>) -
         .collect()
 }
 
-// 封面优先取 preview 第一页：它由当前 PDF 转码而来，始终与下载内容一致；
-// thumbnails 是单独上传的图，可能滞后于教材版次，仅作兜底
+// 目录字段仅作详情不可用时的封面兜底：preview 与 thumbnails 都可能滞后
+// （preview 可能是课程包装层的旧转码，thumbnails 可能是旧版扫描图），
+// 取转码时间戳较新的一个
 fn select_cover_url(cp: &CustomProperties) -> String {
-    first_preview_slide(cp).unwrap_or_else(|| {
-        cp.thumbnails
-            .as_ref()
-            .and_then(|thumbs| thumbs.first())
-            .cloned()
-            .unwrap_or_default()
-    })
+    let preview = first_preview_slide(cp);
+    let thumbnail = cp
+        .thumbnails
+        .as_ref()
+        .and_then(|thumbs| thumbs.first())
+        .cloned();
+
+    match (preview, thumbnail) {
+        (Some(p), Some(t)) => {
+            if transcode_timestamp(&t) > transcode_timestamp(&p) {
+                t
+            } else {
+                p
+            }
+        }
+        (Some(p), None) => p,
+        (None, Some(t)) => t,
+        (None, None) => String::new(),
+    }
+}
+
+// 提取转码路径 ".t/zh-CN/{时间戳}/" 中的时间戳，非转码路径计为 0
+fn transcode_timestamp(url: &str) -> u64 {
+    url.split(".t/zh-CN/")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|ts| ts.parse().ok())
+        .unwrap_or(0)
 }
 
 // preview 的键形如 "Slide1"/"Slide2"，取编号最小的即第一页封面

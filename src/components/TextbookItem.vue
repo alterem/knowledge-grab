@@ -17,6 +17,7 @@ const props = defineProps<{
 // 所有条目共享一个下载状态仓库与一对事件监听（见 useDownloadManager）
 const download = useDownload(props.textbook.download_url);
 const { src: coverSrc, loading: coverLoading, failed: coverFailed } = useCoverImage(
+  props.textbook.id,
   props.textbook.cover_url
 );
 
