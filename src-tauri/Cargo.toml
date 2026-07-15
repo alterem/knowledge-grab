@@ -1,7 +1,7 @@
 [package]
 name = "app"
-version = "0.1.0"
-description = "电子书下载器"
+version = "1.5.0"
+description = "教科书下载器"
 authors = ["Alterem"]
 license = ""
 repository = ""

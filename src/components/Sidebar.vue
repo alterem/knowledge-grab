@@ -66,7 +66,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <el-menu :default-active="activeIndex" class="el-menu-vertical-demo h-full w-[200px]" @select="handleSelect"
+  <el-menu :default-active="activeIndex" :default-openeds="['1']" class="sidebar-menu w-full" @select="handleSelect"
     :collapse="false">
     <template v-for="item in menuItems" :key="item.index">
       <el-sub-menu v-if="item.children && item.children.length > 0" :index="item.index">
@@ -92,27 +92,36 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.el-menu {
+.sidebar-menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: var(--text-color);
+  --el-menu-hover-text-color: var(--text-color);
+  --el-menu-hover-bg-color: var(--hover-bg);
+  --el-menu-active-color: var(--el-color-primary);
+  --el-menu-item-height: 40px;
+  --el-menu-sub-item-height: 36px;
+  --el-menu-base-level-padding: 12px;
+  --el-menu-level-padding: 16px;
+  --el-menu-item-font-size: 14px;
+
   border-right: none;
-  background-color: var(--secondary-bg-color) !important;
+  padding: 10px 8px;
 }
 
-.el-menu-item {
-  border-bottom: 1px solid var(--border-color);
-  background-color: var(--secondary-bg-color) !important;
-  color: var(--text-color) !important;
+/* 圆角菜单项，去掉旧的逐项分割线样式 */
+.sidebar-menu .el-menu-item,
+.sidebar-menu :deep(.el-sub-menu__title) {
+  border-radius: 8px;
+  margin-bottom: 2px;
+  transition: background-color 0.15s, color 0.15s;
 }
 
-.el-menu-item:last-child {
-  border-bottom: none;
+.sidebar-menu .el-menu-item.is-active {
+  background-color: var(--el-color-primary-light-9);
+  font-weight: 600;
 }
 
-.el-menu-item:hover {
-  background-color: var(--border-color) !important;
-}
-
-.el-menu-item.is-active {
-  background-color: var(--primary-color) !important;
-  color: #ffffff !important;
+.sidebar-menu :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
+  color: var(--el-color-primary);
 }
 </style>

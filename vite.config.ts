@@ -15,7 +15,7 @@ export default async (_command: any, mode: string) => {
     server: {
       host: true,
       // open: true,
-      port: env.ALTEREM_PORT,
+      port: Number(env.ALTEREM_PORT) || 15173,
       hmr: {
         overlay: true,
       },

@@ -9,110 +9,103 @@ on:
       - main
   workflow_dispatch:
 
+# PR 上重复推送时取消旧构建；tag 构建不取消，避免误杀发版
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: Build ${{ matrix.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64
+            bundle: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: windows-arm64
+            bundle: |
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-x64
+            bundle: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/*/*
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: macos-arm64
+            bundle: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: macos-x64
+            bundle: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - uses: actions/checkout@v6
+
+      # pnpm 必须先于 setup-node 安装，cache: pnpm 才能生效
       - name: Install pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v6
         with:
           version: 10
           run_install: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Clean Tauri WiX Cache
+        if: runner.os == 'Windows'
         run: |
           Remove-Item -Path "$env:LOCALAPPDATA\tauri\WixTools*" -Recurse -Force -ErrorAction SilentlyContinue
         shell: pwsh
 
-      - name: Build Windows
-        run: pnpm tauri build --target x86_64-pc-windows-msvc
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-build
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+      - name: Build (${{ matrix.target }})
+        run: pnpm tauri build --target ${{ matrix.target }}
 
-  build-linux:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 10
-          run_install: false
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Install Linux Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
-      - name: Build Linux
-        run: pnpm tauri build --target x86_64-unknown-linux-gnu
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: linux-build
-          path: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/*/*
-
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 10
-          run_install: false
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-      - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build macOS (Apple Silicon)
-        run: pnpm tauri build --target aarch64-apple-darwin
-      - name: Build macOS (Intel)
-        run: pnpm tauri build --target x86_64-apple-darwin
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-build
-          path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bundle }}
 
   release:
-    needs: [build-windows, build-linux, build-macos]
+    needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -136,14 +129,14 @@ jobs:
           echo "::debug::Raw git log output:"
           echo "$CHANGELOG_CONTENT"
           echo "::debug::End of raw git log output."
-          DELIMITER=$(openssl rand -hex 8) 
+          DELIMITER=$(openssl rand -hex 8)
           echo "::debug::Writing to GITHUB_OUTPUT with delimiter $DELIMITER"
           printf "%s<<%s\n%s\n%s\n" "CHANGELOG" "$DELIMITER" "$CHANGELOG_CONTENT" "$DELIMITER" >> "$GITHUB_OUTPUT"
           echo "::debug::Finished writing to GITHUB_OUTPUT."
         shell: bash
 
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
 
@@ -151,24 +144,27 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
-            artifacts/windows-build/*.msi
-            artifacts/linux-build/deb/*.deb
-            artifacts/linux-build/rpm/*.rpm
-            artifacts/linux-build/appimage/*.AppImage
-            artifacts/macos-build/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            artifacts/macos-build/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            artifacts/windows-x64/msi/*.msi
+            artifacts/windows-x64/nsis/*-setup.exe
+            artifacts/windows-arm64/msi/*.msi
+            artifacts/windows-arm64/nsis/*-setup.exe
+            artifacts/linux-x64/deb/*.deb
+            artifacts/linux-x64/rpm/*.rpm
+            artifacts/linux-x64/appimage/*.AppImage
+            artifacts/macos-arm64/*.dmg
+            artifacts/macos-x64/*.dmg
           name: Release ${{ github.ref_name }}
           body: |
             ### Release ${{ github.ref_name }}
-            
+
             #### Changelog
             ${{ steps.changelog.outputs.CHANGELOG }}
-            
+
             ---
-            
+
             See the assets below for the builds.
           draft: false
           prerelease: false

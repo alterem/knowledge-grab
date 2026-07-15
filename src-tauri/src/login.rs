@@ -1,5 +1,5 @@
 use serde_json::json;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{window::Color, Emitter, Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 
 const LOGIN_WINDOW_LABEL: &str = "smartedu-login";
 // 中小学子平台：其鉴权 SDK 会把下载所需的 token 写入该域的 localStorage
@@ -7,6 +7,11 @@ const LOGIN_URL: &str = "https://basic.smartedu.cn/";
 // 注入脚本拿到 token 后「跳转」到这个假域名，on_navigation 拦截并取消导航，
 // 请求不会真正发出，仅作进程内消息通道
 const TOKEN_CALLBACK_HOST: &str = "smartedu-token.callback";
+
+// 与前端暗色主题的画布色一致（style.css 中 html.dark 的 --bg-color），
+// 避免暗色模式下登录窗口在加载/导航间隙闪白底
+const DARK_BG: Color = Color(0x14, 0x15, 0x18, 0xff);
+const LIGHT_BG: Color = Color(0xff, 0xff, 0xff, 0xff);
 
 pub const TOKEN_CAPTURED_EVENT: &str = "access-token-captured";
 
@@ -37,10 +42,17 @@ const TOKEN_POLL_SCRIPT: &str = r#"
 /// 打开官方平台登录窗口；登录成功后注入脚本捕获 token，
 /// 通过 access-token-captured 事件回传前端并自动关窗。用户凭据不经过本应用。
 /// 必须是同步命令：macOS 上创建 webview 窗口要求在主线程执行。
+/// is_dark 来自前端当前主题，用于让窗口主题与背景色跟随应用。
 #[tauri::command]
-pub fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
-    // 已有登录窗口时聚焦即可，避免叠开
+pub fn open_login_window(app_handle: tauri::AppHandle, is_dark: Option<bool>) -> Result<(), String> {
+    let is_dark = is_dark.unwrap_or(false);
+    let theme = if is_dark { Theme::Dark } else { Theme::Light };
+    let background = if is_dark { DARK_BG } else { LIGHT_BG };
+
+    // 已有登录窗口时聚焦即可，避免叠开；顺带同步一次主题
     if let Some(existing) = app_handle.get_webview_window(LOGIN_WINDOW_LABEL) {
+        let _ = existing.set_theme(Some(theme));
+        let _ = existing.set_background_color(Some(background));
         let _ = existing.set_focus();
         return Ok(());
     }
@@ -57,6 +69,8 @@ pub fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     )
     .title("请在页面中完成登录（右上角），成功后本窗口将自动关闭")
     .inner_size(1100.0, 780.0)
+    .theme(Some(theme))
+    .background_color(background)
     .initialization_script(TOKEN_POLL_SCRIPT)
     .on_navigation(move |url| {
         if url.host_str() != Some(TOKEN_CALLBACK_HOST) {

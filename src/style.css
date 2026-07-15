@@ -1,17 +1,39 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   设计令牌（主色取自应用图标中的青绿色书脊）
+   ========================================================================== */
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* 跟随应用内主题开关而非系统偏好，避免暗色应用配白色原生滚动条 */
+  color-scheme: light;
+
+  /* 应用层配色 */
+  --bg-color: #f5f6f8;            /* 内容区画布 */
+  --secondary-bg-color: #ffffff;  /* 顶栏 / 侧栏 / 卡片表面 */
+  --text-color: #1f2937;
+  --text-muted: #6b7280;
+  --border-color: #e5e7eb;
+  --hover-bg: #f0f1f4;
+  --primary-color: var(--el-color-primary);
+
+  /* Element Plus 品牌色覆写（青绿色系） */
+  --el-color-primary: #0d9488;
+  --el-color-primary-dark-2: #0a766d;
+  --el-color-primary-light-3: #56b4ac;
+  --el-color-primary-light-5: #86cac4;
+  --el-color-primary-light-7: #b6dfdb;
+  --el-color-primary-light-8: #cfeae7;
+  --el-color-primary-light-9: #e7f4f3;
+
+  --el-border-radius-base: 6px;
+  --el-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif;
+
+  font-family: var(--el-font-family);
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  --bg-color: #ffffff;
-  --text-color: #213547;
-  --primary-color: #646cff;
-  --secondary-bg-color: #f9f9f9;
-  --border-color: #e5e7eb;
-
+  color: var(--text-color);
+  background-color: var(--bg-color);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -19,83 +41,138 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-:root.dark {
-  --bg-color: #212121;
-  --text-color: #ffffff;
-  --primary-color: #747bff;
-  --secondary-bg-color: #242424;
-  --border-color: #374151;
-  background-color: var(--bg-color) !important;
+html.dark {
+  color-scheme: dark;
+
+  --bg-color: #141518;
+  --secondary-bg-color: #1c1d21;
+  --text-color: #e5e7eb;
+  --text-muted: #9ca3af;
+  --border-color: #2e3036;
+  --hover-bg: #26282e;
+
+  --el-color-primary: #14b8a6;
+  --el-color-primary-dark-2: #43c6b8;
+  --el-color-primary-light-3: #14877a;
+  --el-color-primary-light-5: #14665d;
+  --el-color-primary-light-7: #144540;
+  --el-color-primary-light-8: #143531;
+  --el-color-primary-light-9: #142423;
+
+  /* Element Plus 弹层与填充色跟随应用表面色 */
+  --el-bg-color: #1c1d21;
+  --el-bg-color-overlay: #232529;
+  --el-border-color: #34363c;
+  --el-border-color-light: #2e3036;
+  --el-border-color-lighter: #2a2c31;
+  --el-fill-color-light: #26282e;
+  --el-fill-color-lighter: #222429;
+  --el-fill-color-blank: #1c1d21;
+
+  background-color: var(--bg-color);
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* ==========================================================================
+   基础
+   ========================================================================== */
+html,
+body,
+#app {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
-  min-height: 100vh;
   user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+a {
   font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  color: var(--el-color-primary);
+  text-decoration: none;
 }
 
-.card {
-  padding: 2em;
+a:hover {
+  color: var(--el-color-primary-dark-2);
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* 通用卡片表面 */
+.app-card {
+  background-color: var(--secondary-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
-@media (prefers-color-scheme: dark) {
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    color: #ffffff;
-    background-color: #213547;
-  }
+/* 页面标题 / 描述 */
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-color);
+  line-height: 1.4;
+}
+
+.page-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* 页面骨架：固定页头 + 独立滚动内容区（贴合 el-main 的 position:relative，
+   避免页头随内容一起滚动或出现双滚动条） */
+.page-shell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-color);
+  text-align: left;
+}
+
+.page-header {
+  flex-shrink: 0;
+  padding: 14px 24px;
+  background-color: var(--secondary-bg-color);
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.page-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ==========================================================================
+   滚动条
+   ========================================================================== */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+/* 内嵌式细滚动条：半透明灰在浅色/暗色主题下都协调 */
+::-webkit-scrollbar-thumb {
+  background-color: rgba(127, 127, 127, 0.35);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(127, 127, 127, 0.55);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
 }

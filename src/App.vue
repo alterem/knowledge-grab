@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onUnmounted, onMounted, provide } from 'vue';
 import { ElContainer, ElHeader, ElAside, ElMain, ElMessage } from 'element-plus';
-import { Sunny, Moon, QuestionFilled, Promotion } from '@element-plus/icons-vue';
+import { Sunny, Moon, QuestionFilled } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { STORAGE_KEYS } from '@/utils/settings';
 
 const router = useRouter();
@@ -23,13 +24,13 @@ const openGitHub = async () => {
 }
 
 const asideWidth = ref(200);
+const isResizing = ref(false);
 
-let isDragging = false;
 let startX = 0;
 let startWidth = 0;
 
 const startDragging = (event: MouseEvent) => {
-  isDragging = true;
+  isResizing.value = true;
   startX = event.clientX;
   startWidth = asideWidth.value;
   document.addEventListener('mousemove', dragMove);
@@ -37,22 +38,30 @@ const startDragging = (event: MouseEvent) => {
 };
 
 const dragMove = (event: MouseEvent) => {
-  if (!isDragging) return;
+  if (!isResizing.value) return;
   const newWidth = startWidth + (event.clientX - startX);
   asideWidth.value = Math.max(180, Math.min(240, newWidth));
 };
 
 const stopDragging = () => {
-  isDragging = false;
+  isResizing.value = false;
   document.removeEventListener('mousemove', dragMove);
   document.removeEventListener('mouseup', stopDragging);
 };
 
 const isDarkMode = ref(false);
 
+// 同步页面主题类与原生窗口主题（macOS/Windows 标题栏跟随应用而非系统）
+const applyTheme = (dark: boolean) => {
+  document.documentElement.classList.toggle('dark', dark);
+  getCurrentWindow()
+    .setTheme(dark ? 'dark' : 'light')
+    .catch((error) => console.error('设置窗口主题失败:', error));
+};
+
 const toggleTheme = () => {
   isDarkMode.value = !isDarkMode.value;
-  document.documentElement.classList.toggle('dark', isDarkMode.value);
+  applyTheme(isDarkMode.value);
   localStorage.setItem(STORAGE_KEYS.theme, isDarkMode.value ? 'dark' : 'light');
 };
 
@@ -64,7 +73,7 @@ let unlistenTokenCaptured: UnlistenFn | null = null;
 
 onMounted(async () => {
   isDarkMode.value = localStorage.getItem(STORAGE_KEYS.theme) === 'dark';
-  document.documentElement.classList.toggle('dark', isDarkMode.value);
+  applyTheme(isDarkMode.value);
 
   document.addEventListener('contextmenu', handleRightClick);
   window.addEventListener('keydown', handleKeydown);
@@ -105,42 +114,48 @@ onUnmounted(() => {
   <el-config-provider>
     <el-container class="h-screen w-screen">
 
-      <el-header class="flex items-center justify-between border-b border-gray-200 px-6"
-        :style="{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }">
-        <div class="flex items-center">
-          <img src="/icon.png" alt="Logo" class="h-8 w-auto mr-3" @contextmenu.prevent>
-          <span class="text-xl font-semibold" :style="{ color: 'var(--text-color)' }">国家中小学智慧教育平台</span>
+      <el-header height="56px" class="app-header">
+        <div class="flex items-center min-w-0">
+          <img src="/icon.png" alt="Logo" class="h-8 w-8 mr-3 shrink-0" @contextmenu.prevent>
+          <div class="min-w-0">
+            <div class="app-title">国家中小学智慧教育平台</div>
+            <div class="app-subtitle">教材资源下载工具</div>
+          </div>
         </div>
 
-        <div class="flex items-center space-x-4">
-          <el-tooltip :content="isDarkMode ? '切换到亮色模式' : '切换到暗色模式'" placement="top">
-            <el-icon :size="20" class="cursor-pointer text-gray-600 hover:text-blue-500" @click="toggleTheme">
-              <component :is="isDarkMode ? Moon : Sunny" />
-            </el-icon>
+        <div class="flex items-center gap-1">
+          <el-tooltip :content="isDarkMode ? '切换到亮色模式' : '切换到暗色模式'" placement="bottom">
+            <button class="header-icon-btn" type="button" @click="toggleTheme">
+              <el-icon :size="18">
+                <component :is="isDarkMode ? Moon : Sunny" />
+              </el-icon>
+            </button>
           </el-tooltip>
-          <el-tooltip content="帮助" placement="top">
-            <el-icon :size="20" class="cursor-pointer text-gray-600 hover:text-blue-500" @click="onHelp">
-              <QuestionFilled />
-            </el-icon>
+          <el-tooltip content="帮助" placement="bottom">
+            <button class="header-icon-btn" type="button" @click="onHelp">
+              <el-icon :size="18">
+                <QuestionFilled />
+              </el-icon>
+            </button>
           </el-tooltip>
-          <el-tooltip content="GitHub 仓库" placement="top">
-            <el-icon :size="20" class="cursor-pointer text-gray-600 hover:text-blue-500" color="#029686"
-              @click="openGitHub">
-              <Promotion />
-            </el-icon>
+          <el-tooltip content="GitHub 仓库" placement="bottom">
+            <button class="header-icon-btn" type="button" @click="openGitHub">
+              <svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true">
+                <path
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8" />
+              </svg>
+            </button>
           </el-tooltip>
         </div>
       </el-header>
 
       <el-container>
-        <el-aside :width="asideWidth + 'px'" class="flex flex-col overflow-y-auto"
-          :style="{ backgroundColor: 'var(--secondary-bg-color)' }">
+        <el-aside :width="asideWidth + 'px'" class="app-aside">
           <Sidebar />
         </el-aside>
-        <div class="w-1 cursor-ew-resize bg-gray-300 hover:bg-blue-500 transition-colors duration-200"
-          @mousedown="startDragging"></div>
+        <div class="resize-handle" :class="{ 'is-resizing': isResizing }" @mousedown="startDragging"></div>
 
-        <el-main class="p-0 flex-1 overflow-y-auto relative" :style="{ backgroundColor: 'var(--bg-color)' }">
+        <el-main class="app-main">
           <router-view></router-view>
         </el-main>
       </el-container>
@@ -149,4 +164,84 @@ onUnmounted(() => {
   </el-config-provider>
 </template>
 
-<style scoped></style>
+<style scoped>
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  background-color: var(--secondary-bg-color);
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.app-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-subtitle {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.header-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.header-icon-btn:hover {
+  background-color: var(--hover-bg);
+  color: var(--el-color-primary);
+}
+
+.app-aside {
+  background-color: var(--secondary-bg-color);
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+/* 拖拽条平时透明、悬停/拖动时显示主色，并向左覆盖侧栏边框 */
+.resize-handle {
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  width: 3px;
+  margin-left: -3px;
+  cursor: ew-resize;
+  background-color: transparent;
+  transition: background-color 0.15s;
+}
+
+.resize-handle:hover,
+.resize-handle.is-resizing {
+  background-color: var(--el-color-primary);
+}
+
+.app-main {
+  position: relative;
+  padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: var(--bg-color);
+  transition: background-color 0.2s;
+}
+</style>

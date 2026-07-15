@@ -1,9 +1,10 @@
 import { createApp } from 'vue';
-import './style.css';
-import App from './App.vue';
 import ElementPlus from 'element-plus';
 import 'element-plus/dist/index.css';
 import 'element-plus/theme-chalk/dark/css-vars.css';
+// style.css 必须在 Element Plus 样式之后引入，其中的主题变量覆写才能生效
+import './style.css';
+import App from './App.vue';
 import { createRouter, createWebHistory } from 'vue-router';
 import TextbookDownloadPage from '@/pages/TextbookDownloadPage.vue';
 import SettingsPage from '@/pages/SettingsPage.vue';

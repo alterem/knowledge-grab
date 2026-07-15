@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
 import { ElSelect, ElOption, ElMessage, ElMessageBox, ElBreadcrumb, ElBreadcrumbItem } from 'element-plus';
+import { Search, Download } from '@element-plus/icons-vue';
 import { useRoute } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -52,9 +53,17 @@ const breadcrumbItems = computed(() => {
 
 const textbooks = ref<Textbook[]>([]);
 const isLoading = ref(false);
+const hasSearched = ref(false);
 
 watch(categoryId, () => {
   textbooks.value = [];
+  hasSearched.value = false;
+});
+
+const emptyDescription = computed(() => {
+  if (noCategorySelected.value) return '请先在左侧选择一个课本分类';
+  if (!hasSearched.value) return '选择筛选条件后点击「搜索」获取课本列表';
+  return '没有找到相关课本，试试调整筛选条件';
 });
 
 const selectedLabels = computed<TextbookLabels>(() => ({
@@ -67,6 +76,7 @@ const selectedLabels = computed<TextbookLabels>(() => ({
 
 const handleSearch = async () => {
   isLoading.value = true;
+  hasSearched.value = true;
   try {
     textbooks.value = await invoke<Textbook[]>('fetch_textbooks', {
       categoryId: categoryId.value,
@@ -158,57 +168,105 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="max-h-[calc(100vh-100px)]" :style="{ backgroundColor: 'var(--bg-color)', color: 'var(--text-color)' }"
-    v-loading="isLoading">
-    <el-breadcrumb class="mb-3" separator="/">
-      <el-breadcrumb-item v-for="(item, index) in breadcrumbItems" :key="index" :to="item.path">
-        {{ item.title }}
-      </el-breadcrumb-item>
-    </el-breadcrumb>
+  <div class="page-shell" v-loading="isLoading">
+    <div class="toolbar">
+      <el-breadcrumb class="crumbs" separator="/">
+        <el-breadcrumb-item v-for="(item, index) in breadcrumbItems" :key="index" :to="item.path">
+          {{ item.title }}
+        </el-breadcrumb-item>
+      </el-breadcrumb>
 
-    <div class="flex items-center space-x-4 mb-6 flex-nowrap">
-      <div class="w-50 flex items-center space-x-2">
-        <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ subjectLabel }}</label>
-        <el-select v-model="subject" :placeholder="'请选择' + subjectLabel" class="flex-1"
+      <div class="filters">
+        <el-select v-model="subject" class="filter-select" :placeholder="'选择' + subjectLabel"
           :disabled="noCategorySelected">
           <el-option v-for="item in subjects" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-      </div>
 
-      <div class="w-50 flex items-center space-x-2">
-        <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ versionLabel }}</label>
-        <el-select v-model="version" :placeholder="'请选择' + versionLabel" class="flex-1"
+        <el-select v-model="version" class="filter-select" :placeholder="'选择' + versionLabel"
           :disabled="noCategorySelected">
           <el-option v-for="item in versions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-      </div>
 
-      <div class="w-50 flex items-center space-x-2" v-if="isGradeDropdownVisible">
-        <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ gradeLabel }}</label>
-        <el-select v-model="grade" :placeholder="'请选择' + gradeLabel" class="flex-1" :disabled="noCategorySelected">
+        <el-select v-if="isGradeDropdownVisible" v-model="grade" class="filter-select"
+          :placeholder="'选择' + gradeLabel" :disabled="noCategorySelected">
           <el-option v-for="item in grades" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-      </div>
 
-      <div class="w-50 flex items-center space-x-2" v-if="isYearDropdownVisible">
-        <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ yearLabel }}</label>
-        <el-select v-model="year" :placeholder="'请选择' + yearLabel" class="flex-1" :disabled="noCategorySelected">
+        <el-select v-if="isYearDropdownVisible" v-model="year" class="filter-select"
+          :placeholder="'选择' + yearLabel" :disabled="noCategorySelected">
           <el-option v-for="item in years" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-      </div>
 
-      <el-button type="primary" @click="handleSearch" :disabled="noCategorySelected">搜索</el-button>
-      <el-button type="primary" @click="handleBatchDownload" v-if="textbooks.length > 0">批量下载</el-button>
+        <el-button type="primary" :icon="Search" @click="handleSearch" :disabled="noCategorySelected">
+          搜索
+        </el-button>
+        <el-button v-if="textbooks.length > 0" :icon="Download" @click="handleBatchDownload">
+          批量下载
+        </el-button>
+
+        <el-tag v-if="textbooks.length > 0" class="count-tag" type="info" effect="plain" round>
+          共 {{ textbooks.length }} 本
+        </el-tag>
+      </div>
     </div>
 
-    <div class="textbook-list text-center">
-      <TextbookItem v-for="textbook in textbooks" :key="textbook.id" :textbook="textbook" :labels="selectedLabels" />
-      <p v-if="textbooks.length === 0 && !isLoading" class="text-gray-500">
-        {{ noCategorySelected ? '请先选择一个课本分类' : '没有找到相关课本。' }}
-      </p>
-      <div v-if="textbooks.length > 0" class="mt-4 ml-2 text-sm text-gray-500">
-        获取到课本数量：{{ textbooks.length }}
+    <div class="list-area">
+      <div v-if="textbooks.length > 0" class="textbook-grid">
+        <TextbookItem v-for="textbook in textbooks" :key="textbook.id" :textbook="textbook" :labels="selectedLabels" />
       </div>
+      <el-empty v-else-if="!isLoading" :description="emptyDescription" :image-size="110" class="empty-state" />
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 页面骨架由全局 .page-shell 提供：工具栏固定，仅列表区滚动 */
+.toolbar {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  background-color: var(--secondary-bg-color);
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.crumbs {
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.filters .el-button + .el-button {
+  margin-left: 0;
+}
+
+.filter-select {
+  width: 170px;
+}
+
+.count-tag {
+  margin-left: auto;
+}
+
+.list-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+}
+
+.textbook-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 14px;
+}
+
+.empty-state {
+  margin-top: 8vh;
+}
+</style>

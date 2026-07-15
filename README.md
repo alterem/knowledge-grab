@@ -38,11 +38,13 @@ https://github.com/alterem/tauri-react-template
 
 ## 一些截图
 
-![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2025/05/18/T0jSWE.png)
+![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/sj9yYp.png)
 
-![Screenshot of the cover preview](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2025/05/18/MAA9U0.png)
+![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/ShFxKs.png)
 
-![Screenshot of the setting window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2025/05/18/aRMaMr.png)
+![Screenshot of the cover preview](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/r68sKX.png)
+
+![Screenshot of the setting window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/1G94ED.png)
 
 
 ## 环境要求
