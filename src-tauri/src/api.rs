@@ -11,8 +11,12 @@ const TCH_MATERIAL_TAG_URL: &str =
     "https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/tags/tch_material_tag.json";
 const STATISTICS_URL_FORMAT: &str =
     "https://x-api.ykt.eduyun.cn/proxy/cloud/v1/res_stats/actions/query?res_ids={}";
+// Textbook PDFs moved from the public bucket (assets_document, now 403) to the
+// auth-required private bucket. The private host keeps a stable `pdf.pdf` alias,
+// so we still only need the resource id — but requests must carry the x-nd-auth
+// header (see downloader::create_request).
 const DOWNLOAD_URL_FORMAT: &str =
-    "https://r2-ndr.ykt.cbern.com.cn/edu_product/esp/assets_document/{}.pkg/pdf.pdf";
+    "https://r1-ndr-private.ykt.cbern.com.cn/edu_product/esp/assets/{}.pkg/pdf.pdf";
 
 const SPECIAL_EDUCATION: &str = "特殊教育";
 const HIGH_SCHOOL: &str = "高中";

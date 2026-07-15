@@ -122,12 +122,17 @@ fn build_save_path(textbook_info: &TextbookDownloadInfo, download_path: &str) ->
     base_save_path
 }
 
-fn create_request(url: &Url, token: Option<&str>) -> reqwest::RequestBuilder {
-    let mut request = HTTP_CLIENT.get(url.clone());
+fn create_request(url: &Url, token: Option<&str>) -> reqwest::RequestBuilder {    let mut request = HTTP_CLIENT.get(url.clone());
     request = request.header(reqwest::header::USER_AGENT, USER_AGENT);
 
     if let Some(t) = token {
-        request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {}", t));
+        // The ndr-private CDN uses the ND UC MAC scheme via x-nd-auth. It only
+        // validates the token id, so a placeholder nonce/mac is accepted
+        // (Bearer tokens are rejected with 400).
+        request = request.header(
+            "x-nd-auth",
+            format!("MAC id=\"{}\",nonce=\"0\",mac=\"0\"", t),
+        );
     }
 
     request
@@ -267,7 +272,14 @@ pub async fn download_textbook_internal(
     })?;
 
     if !response.status().is_success() {
-        let error_msg = format!("Download failed with status: {}", response.status());
+        let status = response.status();
+        let error_msg = if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+        {
+            "下载失败：需要有效的 Access Token（请在「设置」中填写，或令牌可能已过期）".to_string()
+        } else {
+            format!("Download failed with status: {}", status)
+        };
         emitter.emit_status(DownloadStatus::Failed(error_msg.clone()), 0);
         return Err(error_msg);
     }

@@ -6,8 +6,30 @@
     <div class="p-6 rounded-lg shadow mb-6">
       <div class="text-xl font-semibold mb-4">下载设置</div>
       <el-form label-position="left" label-width="120px">
-        <el-form-item label="API Token">
-          <el-input v-model="apiToken" placeholder="请输入 API Token"></el-input>
+        <el-form-item label="Access Token">
+          <div class="w-full">
+            <el-input v-model="apiToken" placeholder="请输入登录凭据 Access Token（下载教材必需）" show-password
+              clearable></el-input>
+            <div class="mt-1 text-xs" style="color: var(--text-color); opacity: 0.6;">
+              平台已要求登录后才能下载教材，令牌仅保存在本机。
+              <el-button link type="primary" size="small" @click="showTokenHelp = !showTokenHelp">
+                {{ showTokenHelp ? '收起' : '如何获取？' }}
+              </el-button>
+            </div>
+            <div v-if="showTokenHelp" class="mt-2 p-3 rounded border border-gray-300 text-xs leading-relaxed w-full">
+              <ol class="list-decimal list-inside space-y-1">
+                <li>浏览器访问 https://basic.smartedu.cn 并登录（没有账号需先注册）</li>
+                <li>按 F12（或右键 → 检查）打开开发者工具，切换到「控制台 / Console」</li>
+                <li>粘贴以下代码并回车，复制输出的 Access Token 填入上方输入框</li>
+              </ol>
+              <pre class="mt-2 p-2 rounded overflow-x-auto select-text"
+                style="background-color: rgba(127,127,127,0.15);">{{ tokenScript }}</pre>
+              <div class="mt-2 flex items-center space-x-2">
+                <el-button size="small" @click="copyTokenScript">复制代码</el-button>
+                <span style="opacity: 0.6;">提示：令牌约一周过期，下载提示 Token 失效时请重新获取。</span>
+              </div>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="下载路径">
           <div class="flex items-center w-full space-x-2">
@@ -67,6 +89,27 @@ const downloadPath = ref('');
 const threadCount = ref(4);
 const saveByCategory = ref(false);
 const clearingCache = ref(false);
+const showTokenHelp = ref(false);
+
+// Reads the login token from smartedu.cn localStorage (the "...&token" key holds
+// a JSON string whose access_token field is what the download API needs).
+const tokenScript = `(function () {
+  const key = Object.keys(localStorage).find(
+    (k) => k.startsWith("ND_UC_AUTH") && k.endsWith("&token")
+  );
+  if (!key) { console.error("未找到 Access Token，请确认已登录！"); return; }
+  const token = JSON.parse(JSON.parse(localStorage.getItem(key)).value).access_token;
+  console.log("%cAccess Token:", "color: green; font-weight: bold", token);
+})();`;
+
+const copyTokenScript = async () => {
+  try {
+    await navigator.clipboard.writeText(tokenScript);
+    ElMessage.success('代码已复制，请粘贴到平台页面的浏览器控制台');
+  } catch {
+    ElMessage.error('复制失败，请手动选择代码复制');
+  }
+};
 
 const LOCAL_STORAGE_TOKEN_KEY = 'api_token';
 const LOCAL_STORAGE_DOWNLOAD_PATH_KEY = 'download_path';
