@@ -1,92 +1,67 @@
 <script setup lang="ts">
-import { ElMenu, ElMenuItem } from 'element-plus';
+import { ElMenu, ElMenuItem, ElSubMenu, ElIcon } from 'element-plus';
 import { House, Tools, ChatRound, QuestionFilled } from '@element-plus/icons-vue';
-import { invoke } from '@tauri-apps/api/core';
 import { useRouter, useRoute } from 'vue-router';
-import { computed, onMounted, ref, nextTick, markRaw } from 'vue';
+import { computed, onMounted, ref, markRaw, type Component } from 'vue';
+import { useCategories } from '@/composables/useCategories';
 
 const router = useRouter();
 const route = useRoute();
+const { load: loadCategories } = useCategories();
 
-interface DropdownOption {
+interface MenuChild {
+  index: string;
+  title: string;
   value: string;
-  label: string;
+  path: string;
 }
 
+interface MenuItem {
+  index: string;
+  title: string;
+  icon: Component;
+  path: string;
+  children?: MenuChild[];
+}
 
-const menuItems = ref([
-  {
-    index: '1',
-    title: '课本下载',
-    icon: markRaw(House),
-    path: '/textbook-download',
-    children: [] as any[]
-  },
+const menuItems = ref<MenuItem[]>([
+  { index: '1', title: '课本下载', icon: markRaw(House), path: '/textbook-download', children: [] },
   { index: '2', title: '设置', icon: markRaw(Tools), path: '/settings' },
   { index: '3', title: '免责声明', icon: markRaw(ChatRound), path: '/disclaimer' },
   { index: '4', title: '关于/帮助', icon: markRaw(QuestionFilled), path: '/help' },
 ]);
 
+const textbookChildren = computed(() => menuItems.value[0].children ?? []);
+
 const activeIndex = computed(() => {
-  const currentPath = route.path;
-  const currentQuery = route.query;
-
-  if (currentPath === '/textbook-download' && currentQuery.category) {
-    const textbookItem = menuItems.value.find(item => item.index === '1');
-    if (textbookItem && textbookItem.children) {
-      const matchedChild = textbookItem.children.find((child: any) => child.value === currentQuery.category);
-      if (matchedChild) {
-        return matchedChild.index;
-      }
-    }
+  if (route.path === '/textbook-download' && route.query.category) {
+    const matched = textbookChildren.value.find((child) => child.value === route.query.category);
+    if (matched) return matched.index;
   }
-
-  const matchedItem = menuItems.value.find(item => item.path === currentPath);
-  if (matchedItem) {
-    return matchedItem.index;
-  }
-
- return '1';
+  return menuItems.value.find((item) => item.path === route.path)?.index ?? '1';
 });
 
 const handleSelect = (index: string) => {
-  let selectedItem: any = null;
-
-  selectedItem = menuItems.value.find(item => item.index === index);
-
-  if (!selectedItem && index.startsWith('1-')) {
-    const textbookItem = menuItems.value.find(item => item.index === '1');
-    if (textbookItem && textbookItem.children) {
-      selectedItem = textbookItem.children.find((child: any) => child.index === index);
-    }
-  }
-
-  if (selectedItem && selectedItem.path) {
-    nextTick(() => {
-      router.push(selectedItem.path);
-    });
+  const selected =
+    menuItems.value.find((item) => item.index === index) ??
+    textbookChildren.value.find((child) => child.index === index);
+  if (selected?.path) {
+    router.push(selected.path);
   }
 };
 
 onMounted(async () => {
   try {
-    const categories = await invoke('fetch_textbook_categories') as DropdownOption[];
-
-    const textbookItem = menuItems.value.find(item => item.index === '1');
-
-    if (textbookItem) {
-      textbookItem.children = categories.map(category => ({
-        index: `1-${category.value}`,
-        title: category.label,
-        value: category.value,
-        path: `/textbook-download?category=${encodeURIComponent(category.value)}`
-      }));
-    }
-
+    const categories = await loadCategories();
+    menuItems.value[0].children = categories.map((category) => ({
+      index: `1-${category.value}`,
+      title: category.label,
+      value: category.value,
+      path: `/textbook-download?category=${encodeURIComponent(category.value)}`,
+    }));
   } catch (error) {
-    console.error('Error fetching textbook categories:', error);
+    console.error('获取课本分类失败:', error);
   }
-
 });
 </script>
 
@@ -141,4 +116,3 @@ onMounted(async () => {
   color: #ffffff !important;
 }
 </style>
-

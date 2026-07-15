@@ -63,9 +63,9 @@
         <el-form-item label="缓存管理">
           <div class="flex items-center space-x-2">
             <el-button type="warning" @click="clearCache" :loading="clearingCache">
-              清理标签缓存
+              清理数据缓存
             </el-button>
-            <span class="text-sm text-gray-500">清理教材标签缓存，下次请求时将重新获取</span>
+            <span class="text-sm text-gray-500">清理教材标签与书目缓存，下次请求时将重新获取</span>
           </div>
         </el-form-item>
       </el-form>
@@ -92,6 +92,7 @@ import { Check } from '@element-plus/icons-vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { STORAGE_KEYS } from '@/utils/settings';
 
 const isDarkMode = inject('isDarkMode') as Ref<boolean>;
 const toggleTheme = inject('toggleTheme') as () => void;
@@ -103,8 +104,7 @@ const saveByCategory = ref(false);
 const clearingCache = ref(false);
 const showTokenHelp = ref(false);
 
-// Reads the login token from smartedu.cn localStorage (the "...&token" key holds
-// a JSON string whose access_token field is what the download API needs).
+// 从 smartedu.cn 的 localStorage 读取登录令牌（"...&token" 键里的 access_token）
 const tokenScript = `(function () {
   const key = Object.keys(localStorage).find(
     (k) => k.startsWith("ND_UC_AUTH") && k.endsWith("&token")
@@ -123,10 +123,6 @@ const copyTokenScript = async () => {
   }
 };
 
-// In-app login: opens the official platform page in a separate window; the
-// backend captures the token after login and sends it back via this event.
-let unlistenTokenCaptured: UnlistenFn | null = null;
-
 const loginAndFetchToken = async () => {
   try {
     await invoke('open_login_window');
@@ -137,23 +133,18 @@ const loginAndFetchToken = async () => {
   }
 };
 
-const LOCAL_STORAGE_TOKEN_KEY = 'api_token';
-const LOCAL_STORAGE_DOWNLOAD_PATH_KEY = 'download_path';
-const LOCAL_STORAGE_THREAD_COUNT_KEY = 'thread_count';
-const LOCAL_STORAGE_SAVE_BY_CATEGORY_KEY = 'save_by_category';
+let unlistenTokenCaptured: UnlistenFn | null = null;
 
 onMounted(async () => {
-  apiToken.value = localStorage.getItem(LOCAL_STORAGE_TOKEN_KEY) || '';
-  downloadPath.value = localStorage.getItem(LOCAL_STORAGE_DOWNLOAD_PATH_KEY) || '';
-  threadCount.value = parseInt(localStorage.getItem(LOCAL_STORAGE_THREAD_COUNT_KEY) || '4', 10);
-  saveByCategory.value = localStorage.getItem(LOCAL_STORAGE_SAVE_BY_CATEGORY_KEY) === 'true';
+  apiToken.value = localStorage.getItem(STORAGE_KEYS.token) || '';
+  downloadPath.value = localStorage.getItem(STORAGE_KEYS.downloadPath) || '';
+  threadCount.value = parseInt(localStorage.getItem(STORAGE_KEYS.threadCount) || '4', 10);
+  saveByCategory.value = localStorage.getItem(STORAGE_KEYS.saveByCategory) === 'true';
 
-  // App.vue persists the captured token globally; this listener only keeps the
-  // visible input in sync when the Settings page happens to be open.
+  // 令牌的持久化由 App.vue 全局处理，这里只在设置页打开时同步输入框显示
   unlistenTokenCaptured = await listen<{ token: string }>('access-token-captured', (event) => {
     const token = event.payload?.token;
-    if (!token) return;
-    apiToken.value = token;
+    if (token) apiToken.value = token;
   });
 });
 
@@ -177,7 +168,7 @@ const selectDownloadPath = async () => {
 const clearCache = async () => {
   try {
     await ElMessageBox.confirm(
-      '清理缓存后，下次获取教材标签数据时将重新从服务器加载。确定要清理缓存吗？',
+      '清理缓存后，下次获取教材数据时将重新从服务器加载。确定要清理缓存吗？',
       '确认清理缓存',
       {
         confirmButtonText: '确定',
@@ -188,7 +179,7 @@ const clearCache = async () => {
 
     clearingCache.value = true;
     await invoke('clear_tch_material_tag_cache');
-    ElMessage.success('标签缓存已清理');
+    ElMessage.success('数据缓存已清理');
   } catch (error) {
     if (error !== 'cancel') {
       console.error('清理缓存失败:', error);
@@ -200,12 +191,12 @@ const clearCache = async () => {
 };
 
 const saveSettings = () => {
-  localStorage.setItem(LOCAL_STORAGE_TOKEN_KEY, apiToken.value);
-  localStorage.setItem(LOCAL_STORAGE_THREAD_COUNT_KEY, threadCount.value.toString());
-  localStorage.setItem(LOCAL_STORAGE_SAVE_BY_CATEGORY_KEY, saveByCategory.value.toString());
+  localStorage.setItem(STORAGE_KEYS.token, apiToken.value);
+  localStorage.setItem(STORAGE_KEYS.threadCount, threadCount.value.toString());
+  localStorage.setItem(STORAGE_KEYS.saveByCategory, saveByCategory.value.toString());
 
   if (downloadPath.value) {
-    localStorage.setItem(LOCAL_STORAGE_DOWNLOAD_PATH_KEY, downloadPath.value);
+    localStorage.setItem(STORAGE_KEYS.downloadPath, downloadPath.value);
     ElMessage.success('设置已保存');
   } else {
     ElMessage.warning('请先选择下载路径');
@@ -214,13 +205,9 @@ const saveSettings = () => {
 </script>
 
 <style scoped>
-/* Fill <el-main> EXACTLY by absolutely positioning to its four edges (App.vue gives
-   <el-main> position:relative). This avoids the two-scrollbar bug: a height:100% or
-   calc(100vh - Npx) overshoots by ~1px (the header's 1px bottom border), so
-   .settings-root spilled into <el-main> and triggered ITS overflow-y-auto on top of
-   .settings-body's own scroll — two scrollbars. inset:0 matches the content box to
-   the pixel, so <el-main> never scrolls; ONLY .settings-body does. The footer is a
-   flex sibling outside that scroll area, so it stays pinned to the bottom always. */
+/* 用 inset:0 精确贴合 <el-main>（App.vue 中为 position:relative）。
+   height:100%/calc 会因表头 1px 边框溢出触发外层滚动条，出现双滚动条；
+   贴边定位后只有 .settings-body 滚动，底栏固定在外部不随内容滚动。 */
 .settings-root {
   position: absolute;
   inset: 0;

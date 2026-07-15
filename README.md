@@ -49,7 +49,7 @@ https://github.com/alterem/tauri-react-template
 
 - [Node.js](https://nodejs.org/) (推荐 LTS 版本)
 - [Rust](https://www.rust-lang.org/tools/install) (Tauri 框架需要)
-- 构建 Tauri 应用所需的其他依赖项 (详见 [Tauri 官方文档 - Prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
+- 构建 Tauri 应用所需的其他依赖项 (详见 [Tauri 官方文档 - Prerequisites](https://v2.tauri.app/start/prerequisites))
 
 ## 启动项目 (开发模式)
 
@@ -78,8 +78,6 @@ https://github.com/alterem/tauri-react-template
     这个命令会构建前端项目并将 Rust 后端编译成可执行文件，生成对应操作系统的安装包或可执行文件。构建好的文件通常在 `src-tauri/target/release/bundle/` 目录下。
 
 ## 常见问题 (FAQ)
-
-**由于对端网站改版，现在获取教材的方法难度上升，可能需要更多的时间去分析网站数据**
 
 **Q: 在 macOS 上下载的应用无法直接打开，提示“无法验证开发者”或类似错误怎么办？**
 

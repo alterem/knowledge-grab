@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar.vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { STORAGE_KEYS } from '@/utils/settings';
 
 const router = useRouter();
 
@@ -51,39 +52,27 @@ const isDarkMode = ref(false);
 
 const toggleTheme = () => {
   isDarkMode.value = !isDarkMode.value;
-  if (isDarkMode.value) {
-    document.documentElement.classList.add('dark');
-    localStorage.setItem('theme', 'dark');
-  } else {
-    document.documentElement.classList.remove('dark');
-    localStorage.setItem('theme', 'light');
-  }
+  document.documentElement.classList.toggle('dark', isDarkMode.value);
+  localStorage.setItem(STORAGE_KEYS.theme, isDarkMode.value ? 'dark' : 'light');
 };
 
 provide('isDarkMode', isDarkMode);
 provide('toggleTheme', toggleTheme);
 
-// Login window (opened from Settings) reports its captured token here. Handled
-// at app level so the token is persisted even if the user navigates away from
-// the Settings page while the login window is open.
+// 登录窗口捕获的令牌在应用层持久化，避免用户离开设置页后丢失
 let unlistenTokenCaptured: UnlistenFn | null = null;
 
 onMounted(async () => {
-  const savedTheme = localStorage.getItem('theme');
-  if (savedTheme === 'dark') {
-    isDarkMode.value = true;
-    document.documentElement.classList.add('dark');
-  } else {
-    isDarkMode.value = false;
-    document.documentElement.classList.remove('dark');
-  }
+  isDarkMode.value = localStorage.getItem(STORAGE_KEYS.theme) === 'dark';
+  document.documentElement.classList.toggle('dark', isDarkMode.value);
+
   document.addEventListener('contextmenu', handleRightClick);
   window.addEventListener('keydown', handleKeydown);
 
   unlistenTokenCaptured = await listen<{ token: string }>('access-token-captured', (event) => {
     const token = event.payload?.token;
     if (!token) return;
-    localStorage.setItem('api_token', token);
+    localStorage.setItem(STORAGE_KEYS.token, token);
     ElMessage.success('已自动获取 Access Token 并保存');
   });
 });

@@ -1,36 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, watch } from 'vue';
 import { ElButton, ElProgress, ElMessage } from 'element-plus';
 import { Download, Picture, Check, Close, StarFilled, View, Loading } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useDownload } from '@/composables/useDownloadManager';
+import { useCoverImage } from '@/composables/useCoverImage';
+import { formatCount } from '@/utils/format';
+import { readDownloadSettings } from '@/utils/settings';
+import type { Textbook, TextbookLabels } from '@/types';
 
 const props = defineProps<{
-  textbook: {
-    id: string;
-    cover_url: string;
-    title: string;
-    total_uv: number;
-    like_count: number;
-    download_url: string;
-  };
-  categoryLabel: string;
-  subjectLabel: string;
-  versionLabel: string;
-  gradeLabel: string;
-  yearLabel: string;
+  textbook: Textbook;
+  labels: TextbookLabels;
 }>();
 
-// Shared, reactive download state for this book's URL (see useDownloadManager).
+// 所有条目共享一个下载状态仓库与一对事件监听（见 useDownloadManager）
 const download = useDownload(props.textbook.download_url);
-const downloadStatus = computed(() => download.status);
-const downloadProgress = computed(() => download.progress);
-const downloadError = computed(() => download.error);
-const coverImageSrc = ref('');
-const coverLoading = ref(true);
-const coverError = ref(false);
+const { src: coverSrc, loading: coverLoading, failed: coverFailed } = useCoverImage(
+  props.textbook.cover_url
+);
 
-// The manager updates status centrally; surface the success toast here.
 watch(
   () => download.status,
   (status) => {
@@ -45,10 +34,8 @@ watch(
 );
 
 const handleDownload = () => {
-  const apiToken = localStorage.getItem('api_token');
-  const downloadPath = localStorage.getItem('download_path');
-
-  if (!downloadPath) {
+  const settings = readDownloadSettings();
+  if (!settings.downloadPath) {
     download.status = 'failed';
     download.error = '下载路径未设置';
     return;
@@ -58,25 +45,21 @@ const handleDownload = () => {
   download.progress = 0;
   download.error = '';
 
-  const saveByCategorySetting = localStorage.getItem('save_by_category') === 'true';
-
-  const textbookInfo = {
-    url: props.textbook.download_url,
-    title: props.textbook.title,
-    category_label: props.categoryLabel,
-    subject_label: props.subjectLabel,
-    version_label: props.versionLabel,
-    grade_label: props.gradeLabel,
-    year_label: props.yearLabel,
-    save_by_category: saveByCategorySetting,
-  };
-
   invoke('download_textbook', {
-    textbookInfo: textbookInfo,
-    token: apiToken,
-    downloadPath: downloadPath,
-  }).catch(error => {
-    console.error('Download failed:', error);
+    textbookInfo: {
+      url: props.textbook.download_url,
+      title: props.textbook.title,
+      category_label: props.labels.category,
+      subject_label: props.labels.subject,
+      version_label: props.labels.version,
+      grade_label: props.labels.grade,
+      year_label: props.labels.year,
+      save_by_category: settings.saveByCategory,
+    },
+    token: settings.token,
+    downloadPath: settings.downloadPath,
+  }).catch((error) => {
+    console.error('下载失败:', error);
   });
 };
 
@@ -87,70 +70,32 @@ const handleCancel = () => {
       download.progress = 0;
       download.error = '';
     })
-    .catch(error => {
-      console.error('Failed to cancel download:', error);
+    .catch((error) => {
+      console.error('取消下载失败:', error);
       download.error = '取消下载失败';
     });
 };
 
-// Compact display for large counts: 1.2万 / 3450 / 999. Keeps the row narrow
-// and readable instead of showing raw seven-digit numbers.
-const formatCount = (value: number): string => {
-  if (!Number.isFinite(value) || value < 0) return '0';
-  if (value < 10000) return value.toLocaleString('en-US');
-  if (value < 100000000) {
-    const wan = value / 10000;
-    return `${wan >= 100 ? Math.round(wan) : parseFloat(wan.toFixed(1))}万`;
-  }
-  const yi = value / 100000000;
-  return `${yi >= 100 ? Math.round(yi) : parseFloat(yi.toFixed(1))}亿`;
-};
-
 const likeCountText = computed(() => formatCount(props.textbook.like_count));
 const totalUvText = computed(() => formatCount(props.textbook.total_uv));
-
-const fetchCoverImage = async () => {
-  if (!props.textbook.cover_url) {
-    coverLoading.value = false;
-    coverError.value = true;
-    return;
-  }
-  coverLoading.value = true;
-  coverError.value = false;
-  try {
-    const base64Image = await invoke('fetch_image', { url: props.textbook.cover_url });
-    coverImageSrc.value = `data:image/jpeg;base64,${base64Image}`;
-  } catch (error) {
-    console.error('Failed to fetch cover image:', error);
-    coverError.value = true;
-  } finally {
-    coverLoading.value = false;
-  }
-};
-
-onMounted(() => {
-  fetchCoverImage();
-});
 </script>
 
 <template>
   <div class="flex items-center p-4 rounded-lg shadow-sm mb-4"
     :style="{ border: '1px solid var(--border-color)', backgroundColor: 'var(--secondary-bg-color)' }">
     <div class="cover-wrapper mr-6">
-      <!-- While fetch_image resolves (base64 over IPC), show a spinner placeholder
-           so the row doesn't sit with an empty gap. -->
       <div v-if="coverLoading" class="cover-placeholder">
         <el-icon class="is-loading cover-spinner">
           <Loading />
         </el-icon>
       </div>
-      <div v-else-if="coverError || !coverImageSrc" class="cover-placeholder">
+      <div v-else-if="coverFailed || !coverSrc" class="cover-placeholder">
         <el-icon class="cover-fallback-icon">
           <Picture />
         </el-icon>
       </div>
-      <el-image v-else :src="coverImageSrc" :alt="textbook.title" fit="cover"
-        class="cover-image" :preview-src-list="[coverImageSrc]">
+      <el-image v-else :src="coverSrc" :alt="textbook.title" fit="cover" class="cover-image"
+        :preview-src-list="[coverSrc]">
         <template #error>
           <div class="cover-placeholder">
             <el-icon class="cover-fallback-icon">
@@ -177,46 +122,47 @@ onMounted(() => {
             <span :title="textbook.total_uv.toLocaleString('en-US')">{{ totalUvText }}</span>
           </div>
         </div>
-
       </div>
-      <div v-if="downloadStatus === 'downloading'" class="flex flex-col space-y-2 mb-2">
+
+      <div v-if="download.status === 'downloading'" class="flex flex-col space-y-2 mb-2">
         <div class="flex items-center space-x-2">
-          <el-progress :percentage="downloadProgress" :stroke-width="20" :text-inside="true" class="flex-1"
-            :status="downloadProgress === 100 ? 'success' : ''"></el-progress>
-          <span class="text-sm" :style="{ color: 'var(--text-color)' }">{{ downloadProgress }}%</span>
+          <el-progress :percentage="download.progress" :stroke-width="20" :text-inside="true" class="flex-1"
+            :status="download.progress === 100 ? 'success' : ''"></el-progress>
+          <span class="text-sm" :style="{ color: 'var(--text-color)' }">{{ download.progress }}%</span>
         </div>
         <span class="text-xs text-gray-500">正在下载中，请稍候...</span>
       </div>
 
-      <div v-else-if="downloadStatus === 'completed'" class="text-sm text-green-600 mb-2 flex items-center">
+      <div v-else-if="download.status === 'completed'" class="text-sm text-green-600 mb-2 flex items-center">
         <el-icon class="mr-1">
           <Check />
         </el-icon>
         下载完成！
       </div>
 
-      <div v-else-if="downloadStatus === 'failed'" class="text-sm text-red-600 mb-2 flex items-center">
+      <div v-else-if="download.status === 'failed'" class="text-sm text-red-600 mb-2 flex items-center">
         <el-icon class="mr-1">
           <Close />
         </el-icon>
-        下载失败: {{ downloadError }}
+        下载失败: {{ download.error }}
       </div>
 
       <div class="flex space-x-3 justify-end">
-        <el-button @click="handleDownload" size="default" :type="downloadStatus === 'completed' ? 'success' : 'primary'"
-          :disabled="downloadStatus === 'downloading' || downloadStatus === 'completed'"
-          :loading="downloadStatus === 'downloading'">
+        <el-button @click="handleDownload" size="default"
+          :type="download.status === 'completed' ? 'success' : 'primary'"
+          :disabled="download.status === 'downloading' || download.status === 'completed'"
+          :loading="download.status === 'downloading'">
           <el-icon class="mr-1">
-            <Download v-if="downloadStatus !== 'completed'" />
+            <Download v-if="download.status !== 'completed'" />
             <Check v-else />
           </el-icon>
           {{
-            downloadStatus === 'downloading' ? '下载中...' :
-              downloadStatus === 'completed' ? '已下载' :
-                downloadStatus === 'failed' ? '重试下载' : '下载'
+            download.status === 'downloading' ? '下载中...' :
+              download.status === 'completed' ? '已下载' :
+                download.status === 'failed' ? '重试下载' : '下载'
           }}
         </el-button>
-        <el-button v-if="downloadStatus === 'downloading'" @click="handleCancel" size="default" type="danger">
+        <el-button v-if="download.status === 'downloading'" @click="handleCancel" size="default" type="danger">
           取消
         </el-button>
       </div>
@@ -225,9 +171,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* Covers come in mixed aspect ratios (portrait single covers vs. landscape
-   front+back spreads). A fixed box with object-fit: cover keeps every row the
-   same height so the list stays tidy. */
+/* 封面比例不一（竖版单封面/横版跨页），固定容器 + object-fit 保证行高一致 */
 .cover-wrapper {
   width: 6rem;
   height: 8rem;

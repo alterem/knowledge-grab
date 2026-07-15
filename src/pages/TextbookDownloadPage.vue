@@ -1,299 +1,160 @@
 <script setup lang="ts">
-import { ref, watch, computed, type Ref } from 'vue';
+import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
 import { ElSelect, ElOption, ElMessage, ElMessageBox, ElBreadcrumb, ElBreadcrumbItem } from 'element-plus';
-import TextbookItem from '../components/TextbookItem.vue';
 import { useRoute } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { onMounted, onUnmounted } from 'vue';
+import TextbookItem from '@/components/TextbookItem.vue';
+import { useCategories } from '@/composables/useCategories';
+import { useTextbookFilters } from '@/composables/useTextbookFilters';
+import { readDownloadSettings } from '@/utils/settings';
+import type { Textbook, TextbookLabels } from '@/types';
 
 const route = useRoute();
-const textbookCategories = ref<DropdownOption[]>([]);
+const { categories, load: loadCategories } = useCategories();
+
+const categoryId = computed(() => (route.query.category as string) || '');
+const currentCategory = computed(() =>
+  categories.value.find((cat) => cat.value === categoryId.value)
+);
+const isHighSchool = computed(() => currentCategory.value?.label === '高中');
+const isSpecialEducation = computed(() => currentCategory.value?.label === '特殊教育');
+
+const { subject, version, grade, year, subjects, versions, grades, years, labelOf } =
+  useTextbookFilters(categoryId, isSpecialEducation);
+
+// 特殊教育的层级含义不同，界面文案随之变化
+const subjectLabel = computed(() => (isSpecialEducation.value ? '类别' : '学科'));
+const versionLabel = computed(() => (isSpecialEducation.value ? '学段' : '版本'));
+const gradeLabel = computed(() => (isSpecialEducation.value ? '学科' : '年级'));
+const yearLabel = '年级';
+
+const isGradeDropdownVisible = computed(
+  () => !!subject.value && !!version.value && (isSpecialEducation.value || !isHighSchool.value)
+);
+const isYearDropdownVisible = computed(
+  () => isSpecialEducation.value && !!subject.value && !!version.value && !!grade.value
+);
+const noCategorySelected = computed(() => !categoryId.value);
+
 const breadcrumbItems = computed(() => {
   const items: { path?: string; title: string }[] = [];
-  let textbookDownloadPath = '/textbook-download';
-  if (textbookCategories.value.length > 0) {
-    textbookDownloadPath = `/textbook-download?category=${encodeURIComponent(textbookCategories.value[0].value)}`;
+  let rootPath = '/textbook-download';
+  if (categories.value.length > 0) {
+    rootPath = `/textbook-download?category=${encodeURIComponent(categories.value[0].value)}`;
   }
-  items.push({ path: textbookDownloadPath, title: '课本下载' });
-  if (route.query.category) {
-    const selectedCategory = textbookCategories.value.find(
-      (cat) => cat.value === route.query.category
-    );
-    items.push({ title: selectedCategory ? selectedCategory.label : (route.query.category as string) });
+  items.push({ path: rootPath, title: '课本下载' });
+  if (categoryId.value) {
+    items.push({ title: currentCategory.value?.label ?? categoryId.value });
   }
   return items;
 });
 
+const textbooks = ref<Textbook[]>([]);
+const isLoading = ref(false);
+
+watch(categoryId, () => {
+  textbooks.value = [];
+});
+
+const selectedLabels = computed<TextbookLabels>(() => ({
+  category: currentCategory.value?.label || '',
+  subject: labelOf(subjects, subject.value),
+  version: labelOf(versions, version.value),
+  grade: labelOf(grades, grade.value),
+  year: labelOf(years, year.value),
+}));
+
+const handleSearch = async () => {
+  isLoading.value = true;
+  try {
+    textbooks.value = await invoke<Textbook[]>('fetch_textbooks', {
+      categoryId: categoryId.value,
+      subjectId: subject.value,
+      versionId: version.value,
+      gradeId: grade.value,
+      ...(isSpecialEducation.value && year.value && { yearId: year.value }),
+    });
+    if (textbooks.value.length === 0) {
+      ElMessage.info('获取到数据为空');
+    }
+  } catch (error) {
+    console.error('获取课本列表失败:', error);
+    ElMessage.error('获取课本列表失败: ' + error);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const handleBatchDownload = () => {
+  const settings = readDownloadSettings();
+  if (!settings.downloadPath) {
+    ElMessage.warning('下载路径没有设置，前往设置页面设置下载路径后继续');
+    return;
+  }
+
+  const labels = selectedLabels.value;
+  const textbooksToDownload = textbooks.value.map((textbook) => ({
+    url: textbook.download_url,
+    title: textbook.title,
+    category_label: labels.category,
+    subject_label: labels.subject,
+    version_label: labels.version,
+    grade_label: labels.grade,
+    year_label: labels.year,
+    save_by_category: settings.saveByCategory,
+  }));
+
+  invoke('batch_download_textbooks', {
+    textbooksToDownload,
+    token: settings.token,
+    downloadPath: settings.downloadPath,
+    threadCount: settings.threadCount,
+  }).catch((error) => {
+    console.error('批量下载启动失败:', error);
+    ElMessage.error('下载错误' + error);
+  });
+};
 
 let unlistenBatchCompleted: (() => void) | null = null;
 let unlistenBatchFailed: (() => void) | null = null;
 
-const subject = ref('');
-const version = ref('');
-const grade = ref('');
-const year = ref('');
-
-const subjects = ref<DropdownOption[]>([]);
-const versions = ref<DropdownOption[]>([]);
-const grades = ref<DropdownOption[]>([]);
-const years = ref<DropdownOption[]>([]);
-
-interface Textbook {
-  id: string;
-  cover_url: string;
-  title: string;
-  total_uv: number;
-  like_count: number;
-  download_url: string;
-}
-
-interface DropdownOption {
-  value: string;
-  label: string;
-}
-
-const textbooks = ref<Textbook[]>([]);
-
-const isLoading = ref(false);
-
-const handleBatchDownload = () => {
-  const apiToken = localStorage.getItem('api_token');
-  const downloadPath = localStorage.getItem('download_path');
-  const threadCount = localStorage.getItem('thread_count') ? parseInt(localStorage.getItem('thread_count')!, 10) : 4;
-  const saveByCategorySetting = localStorage.getItem('save_by_category') === 'true';
-
-  if (!downloadPath) {
-    ElMessage.warning('下载路径没有设置，前往设置页面设置下载路径后继续')
-    return;
-  }
-
-  const selectedCategoryLabel = textbookCategories.value.find(cat => cat.value === route.query.category)?.label || '';
-  const selectedSubjectLabel = subjects.value.find(sub => sub.value === subject.value)?.label || '';
-  const selectedVersionLabel = versions.value.find(ver => ver.value === version.value)?.label || '';
-  const selectedGradeLabel = grades.value.find(gra => gra.value === grade.value)?.label || '';
-  const selectedYearLabel = years.value.find(ye => ye.value === year.value)?.label || '';
-
-  const textbooksToDownload = textbooks.value.map(textbook => ({
-    url: textbook.download_url,
-    title: textbook.title,
-    category_label: selectedCategoryLabel,
-    subject_label: selectedSubjectLabel,
-    version_label: selectedVersionLabel,
-    grade_label: selectedGradeLabel,
-    year_label: selectedYearLabel,
-    save_by_category: saveByCategorySetting,
-  }));
-
-  invoke('batch_download_textbooks', {
-    textbooksToDownload: textbooksToDownload,
-    token: apiToken,
-    downloadPath: downloadPath,
-    threadCount: threadCount,
-  }).catch(error => {
-    console.error('Failed to start batch download:', error);
-    ElMessage.error('下载错误' + error)
-  });
-};
-
-async function setupTauriListeners() {
-  try {
-    unlistenBatchCompleted = await listen('batch-download-completed', (event: {
-      payload: { downloadPath: string }
-    }) => {
+onMounted(async () => {
+  unlistenBatchCompleted = await listen<{ downloadPath: string }>(
+    'batch-download-completed',
+    (event) => {
       const downloadPath = event.payload.downloadPath;
       ElMessage.success('批量下载完成！');
-      ElMessageBox.confirm(
-        '下载已完成，是否打开下载文件夹？',
-        '下载完成',
-        {
-          confirmButtonText: '打开文件夹',
-          cancelButtonText: '关闭',
-          type: 'success',
-        }
-      )
+      ElMessageBox.confirm('下载已完成，是否打开下载文件夹？', '下载完成', {
+        confirmButtonText: '打开文件夹',
+        cancelButtonText: '关闭',
+        type: 'success',
+      })
         .then(() => {
-          invoke('open_download_folder_prompt', { downloadPath })
-            .catch(err => console.error('Failed to open download folder:', err));
+          invoke('open_download_folder_prompt', { downloadPath }).catch((err) =>
+            console.error('打开下载文件夹失败:', err)
+          );
         })
         .catch(() => {
-          /* user declined */
+          /* 用户选择不打开 */
         });
-    });
-
-    unlistenBatchFailed = await listen('batch-download-failed', () => {
-      ElMessage.error('部分文件下载失败，请检查网络连接后重试。');
-    });
-  } catch (error) {
-    console.error('Error setting up Tauri listeners:', error);
-    ElMessage.error('初始化应用程序时出错，请重启应用。');
-  }
-}
-
-const isHighSchoolCategory = computed(() => {
-  const selectedCategoryOption = textbookCategories.value.find(cat => cat.value === route.query.category);
-  return selectedCategoryOption?.label === '高中';
-});
-const specialEducationCategoryValue = ref('');
-const isSpecialEducationCategory = computed(() => {
-  return route.query.category === specialEducationCategoryValue.value;
-});
-const subjectLabel = computed(() => isSpecialEducationCategory.value ? '类别' : '学科');
-const versionLabel = computed(() => isSpecialEducationCategory.value ? '学段' : '版本');
-const gradeLabel = computed(() => isSpecialEducationCategory.value ? '学科' : '年级');
-const yearLabel = computed(() => '年级');
-
-const isGradeDropdownVisible = computed(() => {
-  return !!subject.value && !!version.value && (isSpecialEducationCategory.value || !isHighSchoolCategory.value);
-});
-
-const isYearDropdownVisible = computed(() => {
-  return isSpecialEducationCategory.value && !!subject.value && !!version.value && !!grade.value;
-});
-
-const fetchFilterOptions = async (args: any, targetRef: Ref<DropdownOption[]>) => {
-  try {
-    const options = await invoke<DropdownOption[]>('fetch_filter_options', { args });
-    const filteredOptions = options ? options.filter(cat => !(cat.value === "267a11ad-0a45-4d3e-a95b-423fc3e959af" && cat.label === "培智学校")) : [];
-    targetRef.value = filteredOptions.sort((a, b) => a.label.localeCompare(b.label));
-  } catch (error) {
-    console.error('Failed to fetch filter options:', error);
-    ElMessage.error('获取筛选信息出错');
-  }
-};
-
-const fetchFirstFilterOptions = async (categoryId: string) => {
-  await fetchFilterOptions({ category_id: categoryId }, subjects);
-  subject.value = '';
-  version.value = '';
-  grade.value = '';
-  year.value = '';
-  versions.value = [];
-  grades.value = [];
-  years.value = [];
-};
-
-const fetchSecondFilterOptions = async (categoryId: string, firstFilterValue: string) => {
-  await fetchFilterOptions({ category_id: categoryId, subject_id: firstFilterValue }, versions);
-  version.value = '';
-  grade.value = '';
-  year.value = '';
-  grades.value = [];
-  years.value = [];
-};
-
-const fetchThirdFilterOptions = async (categoryId: string, firstFilterValue: string, secondFilterValue: string) => {
-  await fetchFilterOptions({ category_id: categoryId, subject_id: firstFilterValue, version_id: secondFilterValue }, grades);
-  grade.value = '';
-  year.value = '';
-  years.value = [];
-};
-
-const fetchFourthFilterOptions = async (categoryId: string, firstFilterValue: string, secondFilterValue: string, thirdFilterValue: string) => {
-  await fetchFilterOptions({ category_id: categoryId, subject_id: firstFilterValue, version_id: secondFilterValue, grade_id: thirdFilterValue }, years);
-  year.value = '';
-};
-
-const isBreadcrumbSingleLevel = computed(() => {
-  return breadcrumbItems.value.length <= 1;
-});
-
-watch(() => route.query.category, (newCategory) => {
-  textbooks.value = [];
-  if (newCategory) {
-    fetchFirstFilterOptions(newCategory as string);
-  } else {
-    subject.value = '';
-    version.value = '';
-    grade.value = '';
-    year.value = '';
-    subjects.value = [];
-    versions.value = [];
-    grades.value = [];
-    years.value = [];
-  }
-});
-
-watch(() => subject.value, (newSubject) => {
-  if (newSubject && route.query.category) {
-    fetchSecondFilterOptions(route.query.category as string, newSubject);
-  } else {
-    version.value = '';
-    grade.value = '';
-    year.value = '';
-    versions.value = [];
-    grades.value = [];
-    years.value = [];
-  }
-});
-
-watch(() => version.value, (newVersion) => {
-  if (newVersion && route.query.category && subject.value) {
-    fetchThirdFilterOptions(route.query.category as string, subject.value, newVersion);
-  } else {
-    grade.value = '';
-    year.value = '';
-    grades.value = [];
-    years.value = [];
-  }
-});
-
-watch(() => grade.value, (newGrade) => {
-  if (isSpecialEducationCategory.value && newGrade && route.query.category && subject.value && version.value) {
-    fetchFourthFilterOptions(route.query.category as string, subject.value, version.value, newGrade);
-  } else {
-    year.value = '';
-    years.value = [];
-  }
-});
-
-
-onMounted(async () => {
-  setupTauriListeners();
-
-  try {
-    textbookCategories.value = await invoke('fetch_textbook_categories') as DropdownOption[];
-    const specialEducationCategory = textbookCategories.value.find(cat => cat.label === '特殊教育');
-    if (specialEducationCategory) {
-      specialEducationCategoryValue.value = specialEducationCategory.value;
     }
-  } catch (error) {
-    console.error('Error fetching textbook categories for breadcrumb:', error);
-    ElMessage.error('获取课本分类出错');
-  }
+  );
 
-  if (route.query.category) {
-    fetchFirstFilterOptions(route.query.category as string);
-  }
+  unlistenBatchFailed = await listen('batch-download-failed', () => {
+    ElMessage.error('部分文件下载失败，请检查网络连接后重试。');
+  });
+
+  loadCategories().catch((error) => {
+    console.error('获取课本分类失败:', error);
+    ElMessage.error('获取课本分类出错');
+  });
 });
 
 onUnmounted(() => {
   unlistenBatchCompleted?.();
   unlistenBatchFailed?.();
 });
-
-const handleSearch = async () => {
-  isLoading.value = true;
-  try {
-    const fetchedTextbooks = await invoke<Textbook[]>('fetch_textbooks', {
-      categoryId: route.query.category as string,
-      subjectId: subject.value,
-      versionId: version.value,
-      gradeId: grade.value,
-      ...(isSpecialEducationCategory.value && year.value && { yearId: year.value }),
-    }) as Textbook[];
-    textbooks.value = fetchedTextbooks;
-    if (textbooks.value.length === 0) {
-      ElMessage.info('获取到数据为空');
-    }
-  } catch (error) {
-    console.error('Failed to fetch textbooks:', error);
-    ElMessage.error('Failed to fetch textbooks:' + error)
-  } finally {
-    isLoading.value = false;
-  }
-};
-
 </script>
 
 <template>
@@ -309,7 +170,7 @@ const handleSearch = async () => {
       <div class="w-50 flex items-center space-x-2">
         <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ subjectLabel }}</label>
         <el-select v-model="subject" :placeholder="'请选择' + subjectLabel" class="flex-1"
-          :disabled="isBreadcrumbSingleLevel">
+          :disabled="noCategorySelected">
           <el-option v-for="item in subjects" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </div>
@@ -317,42 +178,33 @@ const handleSearch = async () => {
       <div class="w-50 flex items-center space-x-2">
         <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ versionLabel }}</label>
         <el-select v-model="version" :placeholder="'请选择' + versionLabel" class="flex-1"
-          :disabled="isBreadcrumbSingleLevel">
+          :disabled="noCategorySelected">
           <el-option v-for="item in versions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </div>
 
       <div class="w-50 flex items-center space-x-2" v-if="isGradeDropdownVisible">
         <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ gradeLabel }}</label>
-        <el-select v-model="grade" :placeholder="'请选择' + gradeLabel" class="flex-1" :disabled="isBreadcrumbSingleLevel">
+        <el-select v-model="grade" :placeholder="'请选择' + gradeLabel" class="flex-1" :disabled="noCategorySelected">
           <el-option v-for="item in grades" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </div>
 
       <div class="w-50 flex items-center space-x-2" v-if="isYearDropdownVisible">
         <label class="text-sm font-medium" :style="{ color: 'var(--text-color)' }">{{ yearLabel }}</label>
-        <el-select v-model="year" :placeholder="'请选择' + yearLabel" class="flex-1" :disabled="isBreadcrumbSingleLevel">
+        <el-select v-model="year" :placeholder="'请选择' + yearLabel" class="flex-1" :disabled="noCategorySelected">
           <el-option v-for="item in years" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </div>
 
-      <el-button type="primary" @click="handleSearch" :disabled="isBreadcrumbSingleLevel">搜索</el-button>
+      <el-button type="primary" @click="handleSearch" :disabled="noCategorySelected">搜索</el-button>
       <el-button type="primary" @click="handleBatchDownload" v-if="textbooks.length > 0">批量下载</el-button>
     </div>
 
     <div class="textbook-list text-center">
-      <TextbookItem
-        v-for="textbook in textbooks"
-        :key="textbook.id"
-        :textbook="textbook"
-        :categoryLabel="textbookCategories.find(cat => cat.value === route.query.category)?.label || ''"
-        :subjectLabel="subjects.find(sub => sub.value === subject)?.label || ''"
-        :versionLabel="versions.find(ver => ver.value === version)?.label || ''"
-        :gradeLabel="grades.find(gra => gra.value === grade)?.label || ''"
-        :yearLabel="years.find(ye => ye.value === year)?.label || ''"
-      />
-      <p v-if="textbooks.length === 0 && !isLoading" class="text-gray-500">{{ !route.query.category ? '请先选择一个课本分类' :
-        '没有找到相关课本。' }}
+      <TextbookItem v-for="textbook in textbooks" :key="textbook.id" :textbook="textbook" :labels="selectedLabels" />
+      <p v-if="textbooks.length === 0 && !isLoading" class="text-gray-500">
+        {{ noCategorySelected ? '请先选择一个课本分类' : '没有找到相关课本。' }}
       </p>
       <div v-if="textbooks.length > 0" class="mt-4 ml-2 text-sm text-gray-500">
         获取到课本数量：{{ textbooks.length }}
@@ -360,5 +212,3 @@ const handleSearch = async () => {
     </div>
   </div>
 </template>
-
-<style scoped></style>

@@ -28,17 +28,15 @@ interface ProgressPayload {
   progress: number;
 }
 
-// One reactive store keyed by download URL, shared across every TextbookItem.
-// A single pair of Tauri listeners dispatches into it, so N visible items no
-// longer register N listener pairs that each re-check every event.
+// 以下载 URL 为键的全局响应式状态仓库，所有 TextbookItem 共享一对事件监听，
+// 避免 N 个可见条目各注册 N 对监听、每个事件被重复检查 N 次
 const states = reactive(new Map<string, DownloadState>());
 
 function ensureState(url: string): DownloadState {
   let state = states.get(url);
   if (!state) {
     states.set(url, { status: 'idle', progress: 0, error: '', filePath: '' });
-    // Re-read so callers get the reactive proxy the Map returns, not the raw
-    // object literal — mutations on the raw object wouldn't be tracked.
+    // 重新 get 拿到 Map 返回的响应式代理，直接用字面量对象的话修改不会被跟踪
     state = states.get(url)!;
   }
   return state;
@@ -86,19 +84,14 @@ function init(): Promise<void> {
   return initPromise;
 }
 
-/**
- * Returns the shared reactive download state for a URL, registering the global
- * listeners on first use. The returned object is stable for the URL's lifetime,
- * so components can read and mutate it directly.
- */
+// 返回该 URL 的共享下载状态（对象在 URL 生命周期内稳定，可直接读写），首次调用时注册全局监听
 export function useDownload(url: string): DownloadState {
   const state = ensureState(url);
-  // Fire-and-forget; idempotent across every caller.
   void init();
   return state;
 }
 
-/** Tears down the global listeners. Intended for a full app teardown only. */
+// 仅用于整个应用的销毁清理
 export async function disposeDownloadManager(): Promise<void> {
   unlistenStatus?.();
   unlistenProgress?.();
