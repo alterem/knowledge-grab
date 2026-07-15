@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "clean": "bash scripts/clean.sh",
+    "clean:all": "bash scripts/clean.sh --all",
+    "clean:deps": "bash scripts/clean.sh --deps"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
