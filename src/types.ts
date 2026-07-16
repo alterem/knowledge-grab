@@ -34,5 +34,7 @@ export interface CourseResource {
 // 一个课程 URL 的解析结果
 export interface CourseParseResult {
   title: string;
+  // 分类目录段（学段/学科/版本/年级/册次，可为空），用于卡片展示与「按分类保存」
+  category_path: string[];
   resources: CourseResource[];
 }

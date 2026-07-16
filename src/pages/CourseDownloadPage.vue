@@ -85,6 +85,8 @@ const startDownload = (resource: CourseResource) => {
       format: resource.format,
       is_video: resource.is_video,
       course_title: result.value?.title ?? null,
+      save_by_category: settings.saveByCategory,
+      category_path: result.value?.category_path ?? [],
     },
     token: settings.token,
     downloadPath: settings.downloadPath,
@@ -136,6 +138,8 @@ const handleBatchDownload = () => {
       format: r.format,
       is_video: r.is_video,
       course_title: result.value?.title ?? null,
+      save_by_category: settings.saveByCategory,
+      category_path: result.value?.category_path ?? [],
     })),
     token: settings.token,
     downloadPath: settings.downloadPath,
@@ -231,6 +235,15 @@ const handleBatchDownload = () => {
                   {{ resource.is_video ? '视频' : '课件' }}
                 </el-tag>
                 <span class="res-format">{{ resource.format.toUpperCase() }}</span>
+                <el-tag
+                  v-for="seg in result.category_path"
+                  :key="seg"
+                  size="small"
+                  type="info"
+                  effect="plain"
+                >
+                  {{ seg }}
+                </el-tag>
               </div>
 
               <div v-if="stateOf(resource).status === 'downloading'" class="progress-block">
@@ -480,7 +493,9 @@ html.dark .res-card:hover {
 .res-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 4px;
 }
 
 .res-format {

@@ -38,10 +38,11 @@ pub struct CourseResource {
     pub cover_url: String,
 }
 
-// 一个课程解析结果：课程标题 + 其下的资源清单
+// 一个课程解析结果：课程标题 + 分类目录段（学段/学科/…，可为空）+ 其下的资源清单
 #[derive(Debug, Clone, Serialize)]
 pub struct CourseParseResult {
     pub title: String,
+    pub category_path: Vec<String>,
     pub resources: Vec<CourseResource>,
 }
 
@@ -54,6 +55,11 @@ pub struct CourseDownloadInfo {
     pub is_video: bool,
     // 课程标题，用作保存子目录（同一课程的多个资源归在一起）
     pub course_title: Option<String>,
+    // 「按分类保存」开关及解析出的分类目录段，勾选时插在课程子目录之前
+    #[serde(default)]
+    pub save_by_category: bool,
+    #[serde(default)]
+    pub category_path: Vec<String>,
 }
 
 // 只保留实际用到的字段，几千条书目反序列化后能省不少内存

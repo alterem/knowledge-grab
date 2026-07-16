@@ -256,6 +256,76 @@ fn url_extension(url: &str) -> Option<String> {
     }
 }
 
+// 已知标签维度 → 目录层级顺序：学段/学科/版本/年级/册次，与教材「按分类保存」的
+// 层级习惯一致。其余维度（如 bklx=课程包 这类资源类型标签）不入目录。
+const TAG_DIMENSION_ORDER: &[&str] = &["zxxxd", "zxxxk", "zxxbb", "zxxnj", "zxxcc"];
+
+// 从详情 JSON 的 tag_list 提取分类目录段。两种形态：
+// - national_lesson 等：标签带 tag_dimension_id，按已知维度排序
+// - special_edu 等：维度为 null，按名称特征归桶（学段/学科/年级/册次）后排序
+fn extract_category_path(detail: &Value) -> Vec<String> {
+    let Some(tags) = detail.get("tag_list").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let name_of = |t: &Value| {
+        t.get("tag_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    let mut path: Vec<String> = Vec::new();
+    let push_unique = |path: &mut Vec<String>, name: String| {
+        if !path.contains(&name) {
+            path.push(name);
+        }
+    };
+
+    let dimensioned: Vec<(String, String)> = tags
+        .iter()
+        .filter_map(|t| {
+            let dim = t.get("tag_dimension_id").and_then(Value::as_str)?;
+            Some((dim.to_string(), name_of(t)?))
+        })
+        .collect();
+
+    if !dimensioned.is_empty() {
+        for dim in TAG_DIMENSION_ORDER {
+            for (d, name) in &dimensioned {
+                if d == dim {
+                    push_unique(&mut path, name.clone());
+                }
+            }
+        }
+        return path;
+    }
+
+    let mut stages = Vec::new();
+    let mut grades = Vec::new();
+    let mut volumes = Vec::new();
+    let mut subjects = Vec::new();
+    for name in tags.iter().filter_map(name_of) {
+        if matches!(name.as_str(), "小学" | "初中" | "高中") {
+            stages.push(name);
+        } else if name.ends_with("年级")
+            || matches!(name.as_str(), "高一" | "高二" | "高三" | "初一" | "初二" | "初三")
+        {
+            grades.push(name);
+        } else if name.ends_with('册') {
+            volumes.push(name);
+        } else {
+            subjects.push(name);
+        }
+    }
+    for group in [stages, subjects, grades, volumes] {
+        for name in group {
+            push_unique(&mut path, name);
+        }
+    }
+    path
+}
+
 /// 解析课程页 URL，返回其下所有可下载资源。
 #[tauri::command]
 pub async fn parse_course_url(url: String) -> Result<CourseParseResult, String> {
@@ -302,6 +372,7 @@ pub async fn parse_course_url(url: String) -> Result<CourseParseResult, String> 
 
     Ok(CourseParseResult {
         title: course_title,
+        category_path: extract_category_path(&detail),
         resources,
     })
 }

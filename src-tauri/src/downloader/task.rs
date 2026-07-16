@@ -339,8 +339,13 @@ pub(super) async fn run_course(
     let emitter = DownloadEventEmitter::new(app_handle, url.clone());
     emitter.emit_status(DownloadStatus::Downloading, 0);
 
-    // 同一课程的多个资源归到以课程标题命名的子目录
+    // 「按分类保存」时先按分类目录段分层，同一课程的多个资源再归到课程标题子目录
     let mut base_save_path = PathBuf::from(&download_path);
+    if resource.save_by_category {
+        for seg in resource.category_path.iter().filter(|s| !s.trim().is_empty()) {
+            base_save_path.push(sanitize_name(seg));
+        }
+    }
     if let Some(course) = resource.course_title.as_deref().filter(|s| !s.is_empty()) {
         base_save_path.push(sanitize_name(course));
     }
