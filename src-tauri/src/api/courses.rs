@@ -376,3 +376,47 @@ pub async fn parse_course_url(url: String) -> Result<CourseParseResult, String> 
         resources,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // 样例取自线上真实详情 JSON（2026-07）
+    #[test]
+    fn category_path_with_dimension_ids() {
+        // national_lesson：标签带维度，bklx（课程包）不入目录
+        let detail = json!({
+            "tag_list": [
+                {"tag_name": "课程包", "tag_dimension_id": "bklx"},
+                {"tag_name": "人教版", "tag_dimension_id": "zxxbb"},
+                {"tag_name": "必修 全一册", "tag_dimension_id": "zxxcc"},
+                {"tag_name": "高中", "tag_dimension_id": "zxxxd"},
+                {"tag_name": "体育与健康", "tag_dimension_id": "zxxxk"},
+            ]
+        });
+        assert_eq!(
+            extract_category_path(&detail),
+            vec!["高中", "体育与健康", "人教版", "必修 全一册"]
+        );
+    }
+
+    #[test]
+    fn category_path_without_dimension_ids() {
+        // special_edu（基础作业）：维度为 null，按名称特征排成 学科/年级/册次
+        let detail = json!({
+            "tag_list": [
+                {"tag_name": "三年级", "tag_dimension_id": null},
+                {"tag_name": "上册", "tag_dimension_id": null},
+                {"tag_name": "语文", "tag_dimension_id": null},
+            ]
+        });
+        assert_eq!(extract_category_path(&detail), vec!["语文", "三年级", "上册"]);
+    }
+
+    #[test]
+    fn category_path_missing_tags() {
+        assert!(extract_category_path(&json!({})).is_empty());
+        assert!(extract_category_path(&json!({"tag_list": []})).is_empty());
+    }
+}
