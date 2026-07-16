@@ -38,9 +38,9 @@ https://github.com/alterem/tauri-react-template
 
 ## 一些截图
 
-![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/sj9yYp.png)
+![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/pwVHFC.png)
 
-![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/ShFxKs.png)
+![Screenshot of the main window](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/aAaOSa.png)
 
 ![Screenshot of the cover preview](https://raw.githubusercontent.com/alterem/picFB/master/uPic/2026/07/16/r68sKX.png)
 

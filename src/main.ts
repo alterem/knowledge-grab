@@ -8,12 +8,13 @@ import App from './App.vue';
 import { createRouter, createWebHistory } from 'vue-router';
 import TextbookDownloadPage from '@/pages/TextbookDownloadPage.vue';
 import CourseDownloadPage from '@/pages/CourseDownloadPage.vue';
+import WelcomePage from '@/pages/WelcomePage.vue';
 import SettingsPage from '@/pages/SettingsPage.vue';
 import DisclaimerPage from '@/pages/DisclaimerPage.vue';
 import HelpPage from '@/pages/HelpPage.vue'
 
 const routes = [
-  { path: '/', component: TextbookDownloadPage },
+  { path: '/', component: WelcomePage },
   { path: '/textbook-download', component: TextbookDownloadPage },
   { path: '/course-download', component: CourseDownloadPage },
   { path: '/settings', component: SettingsPage },

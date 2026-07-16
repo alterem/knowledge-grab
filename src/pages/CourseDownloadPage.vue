@@ -1,9 +1,12 @@
+<script lang="ts">
+export default { name: 'CourseDownloadPage' };
+</script>
+
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue';
-import { ElInput, ElButton, ElMessage, ElMessageBox, ElIcon, ElImage, ElTag } from 'element-plus';
-import { Search, Download, VideoPlay, Document, Loading, Check, Close, Refresh } from '@element-plus/icons-vue';
+import { ref, reactive } from 'vue';
+import { ElInput, ElButton, ElMessage, ElIcon, ElImage, ElTag } from 'element-plus';
+import { Search, Download, VideoPlay, Document, Loading, Check, Close, Refresh, FolderOpened } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useDownload } from '@/composables/useDownloadManager';
 import { readDownloadSettings } from '@/utils/settings';
 import type { CourseParseResult, CourseResource } from '@/types';
@@ -15,15 +18,19 @@ const result = ref<CourseParseResult | null>(null);
 // 每个资源的下载状态从共享仓库取，key 为其 download_url（与后端取消令牌一致）
 const stateOf = (resource: CourseResource) => useDownload(resource.download_url);
 
-// 封面走后端代理转 base64（webview 直连外部图片不稳定，同教材封面做法），按原始 URL 缓存
+// 封面走后端代理转 base64（webview 直连外部图片不稳定，同教材封面做法），按原始 URL 缓存。
+// 值为 'loading' 表示请求中（显示 loading），'' 表示失败/无封面（显示占位图），data URL 表示成功
 const coverCache = reactive(new Map<string, string>());
 const loadCover = (coverUrl: string) => {
   if (!coverUrl || coverCache.has(coverUrl)) return;
-  coverCache.set(coverUrl, '');
+  coverCache.set(coverUrl, 'loading');
   invoke<string>('fetch_image', { url: coverUrl })
     .then((base64) => coverCache.set(coverUrl, `data:image/jpeg;base64,${base64}`))
-    .catch(() => coverCache.delete(coverUrl));
+    .catch(() => coverCache.set(coverUrl, ''));
 };
+
+// 判断缓存值是否为已加载好的图片（区别于 'loading' / '' 占位态）
+const isDataUrl = (v: string | undefined) => !!v && v.startsWith('data:');
 
 // 打开下载完成的文件（视频用系统默认播放器播放）
 const playResource = (resource: CourseResource) => {
@@ -93,6 +100,18 @@ const cancelDownload = (resource: CourseResource) => {
   });
 };
 
+// 在系统文件管理器中定位已下载的文件
+const revealResource = (resource: CourseResource) => {
+  const path = stateOf(resource).filePath;
+  if (!path) {
+    ElMessage.warning('未找到已下载的文件');
+    return;
+  }
+  invoke('reveal_file', { path }).catch((error) => {
+    ElMessage.error('打开文件夹失败: ' + error);
+  });
+};
+
 const handleBatchDownload = () => {
   const settings = readDownloadSettings();
   if (!settings.downloadPath) {
@@ -126,37 +145,7 @@ const handleBatchDownload = () => {
     ElMessage.error('批量下载启动失败: ' + error);
   });
 };
-
-let unlistenCompleted: (() => void) | null = null;
-let unlistenFailed: (() => void) | null = null;
-
-onMounted(async () => {
-  unlistenCompleted = await listen<{ downloadPath: string }>('batch-download-completed', (event) => {
-    ElMessage.success('批量下载完成！');
-    ElMessageBox.confirm('下载已完成，是否打开下载文件夹？', '下载完成', {
-      confirmButtonText: '打开文件夹',
-      cancelButtonText: '关闭',
-      type: 'success',
-    })
-      .then(() => {
-        invoke('open_download_folder_prompt', { downloadPath: event.payload.downloadPath }).catch(
-          (err) => console.error('打开下载文件夹失败:', err)
-        );
-      })
-      .catch(() => {
-        /* 用户选择不打开 */
-      });
-  });
-
-  unlistenFailed = await listen('batch-download-failed', () => {
-    ElMessage.error('部分资源下载失败，请检查网络或令牌后重试。');
-  });
-});
-
-onUnmounted(() => {
-  unlistenCompleted?.();
-  unlistenFailed?.();
-});
+// 批量下载完成/失败提示由 App.vue 全局统一处理，避免 keep-alive 下重复弹窗
 </script>
 
 <template>
@@ -200,7 +189,12 @@ onUnmounted(() => {
         <div class="resource-grid">
           <div v-for="resource in result.resources" :key="resource.id || resource.download_url" class="res-card app-card">
             <div class="res-cover">
-              <template v-if="coverCache.get(resource.cover_url)">
+              <!-- 封面加载中 -->
+              <div v-if="coverCache.get(resource.cover_url) === 'loading'" class="cover-fallback">
+                <el-icon class="is-loading cover-spinner"><Loading /></el-icon>
+              </div>
+              <!-- 封面加载成功 -->
+              <template v-else-if="isDataUrl(coverCache.get(resource.cover_url))">
                 <el-image
                   :src="coverCache.get(resource.cover_url)"
                   fit="cover"
@@ -216,6 +210,7 @@ onUnmounted(() => {
                   <el-icon :size="28"><VideoPlay /></el-icon>
                 </div>
               </template>
+              <!-- 无封面/加载失败：类型图标占位 -->
               <div
                 v-else
                 class="cover-fallback"
@@ -270,6 +265,7 @@ onUnmounted(() => {
                   size="small"
                   :type="stateOf(resource).status === 'completed' ? 'success' : 'primary'"
                   :disabled="stateOf(resource).status === 'downloading'"
+                  :loading="stateOf(resource).status === 'downloading'"
                   @click="startDownload(resource)"
                 >
                   <el-icon class="mr-1" v-if="stateOf(resource).status !== 'downloading'">
@@ -303,6 +299,15 @@ onUnmounted(() => {
                     <Document v-else />
                   </el-icon>
                   {{ resource.is_video ? '播放' : '打开' }}
+                </el-button>
+                <el-button
+                  v-if="stateOf(resource).status === 'completed'"
+                  size="small"
+                  plain
+                  @click="revealResource(resource)"
+                >
+                  <el-icon class="mr-1"><FolderOpened /></el-icon>
+                  打开文件夹
                 </el-button>
               </div>
             </div>
@@ -376,15 +381,16 @@ onUnmounted(() => {
 
 .resource-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 14px;
 }
 
 .res-card {
   display: flex;
-  gap: 14px;
-  padding: 12px;
-  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  gap: 16px;
+  height: 100%;
+  padding: 14px;
+  transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .res-card:hover {
@@ -400,7 +406,7 @@ html.dark .res-card:hover {
 .res-cover {
   position: relative;
   width: 96px;
-  height: 72px;
+  height: 128px;
   flex-shrink: 0;
 }
 
@@ -415,7 +421,7 @@ html.dark .res-card:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: 8px;
   background-color: rgba(0, 0, 0, 0.35);
   color: #fff;
   opacity: 0;
@@ -429,14 +435,15 @@ html.dark .res-card:hover {
 .cover-img {
   width: 100%;
   height: 100%;
-  border-radius: 6px;
+  border-radius: 8px;
   display: block;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 .cover-fallback {
   width: 100%;
   height: 100%;
-  border-radius: 6px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -445,20 +452,25 @@ html.dark .res-card:hover {
   color: var(--text-muted);
 }
 
+.cover-spinner {
+  font-size: 1.5rem;
+  color: var(--el-color-primary);
+}
+
 .res-info {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .res-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-color);
-  margin: 0;
-  line-height: 1.4;
+  margin: 2px 0 0;
+  line-height: 1.45;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -508,8 +520,15 @@ html.dark .res-card:hover {
 
 .res-actions {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
   margin-top: auto;
+  padding-top: 12px;
+}
+
+.res-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .empty-state {

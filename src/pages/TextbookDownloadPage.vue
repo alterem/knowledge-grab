@@ -1,20 +1,23 @@
+<script lang="ts">
+// keep-alive 依 include 匹配组件 name，单独声明
+export default { name: 'TextbookDownloadPage' };
+</script>
+
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, onUnmounted } from 'vue';
-import { ElSelect, ElOption, ElMessage, ElMessageBox, ElBreadcrumb, ElBreadcrumbItem } from 'element-plus';
+import { ref, watch, computed, onMounted } from 'vue';
+import { ElSelect, ElOption, ElMessage } from 'element-plus';
 import { Search, Download } from '@element-plus/icons-vue';
-import { useRoute } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import TextbookItem from '@/components/TextbookItem.vue';
 import { useCategories } from '@/composables/useCategories';
 import { useTextbookFilters } from '@/composables/useTextbookFilters';
 import { readDownloadSettings } from '@/utils/settings';
 import type { Textbook, TextbookLabels } from '@/types';
 
-const route = useRoute();
 const { categories, load: loadCategories } = useCategories();
 
-const categoryId = computed(() => (route.query.category as string) || '');
+// 分类作为页面内第一级筛选（本地状态，配合 keep-alive 切换页面后保留）
+const categoryId = ref('');
 const currentCategory = computed(() =>
   categories.value.find((cat) => cat.value === categoryId.value)
 );
@@ -38,19 +41,6 @@ const isYearDropdownVisible = computed(
 );
 const noCategorySelected = computed(() => !categoryId.value);
 
-const breadcrumbItems = computed(() => {
-  const items: { path?: string; title: string }[] = [];
-  let rootPath = '/textbook-download';
-  if (categories.value.length > 0) {
-    rootPath = `/textbook-download?category=${encodeURIComponent(categories.value[0].value)}`;
-  }
-  items.push({ path: rootPath, title: '课本下载' });
-  if (categoryId.value) {
-    items.push({ title: currentCategory.value?.label ?? categoryId.value });
-  }
-  return items;
-});
-
 const textbooks = ref<Textbook[]>([]);
 const isLoading = ref(false);
 const hasSearched = ref(false);
@@ -61,7 +51,7 @@ watch(categoryId, () => {
 });
 
 const emptyDescription = computed(() => {
-  if (noCategorySelected.value) return '请先在左侧选择一个课本分类';
+  if (noCategorySelected.value) return '请先选择一个课本分类';
   if (!hasSearched.value) return '选择筛选条件后点击「搜索」获取课本列表';
   return '没有找到相关课本，试试调整筛选条件';
 });
@@ -126,57 +116,30 @@ const handleBatchDownload = () => {
   });
 };
 
-let unlistenBatchCompleted: (() => void) | null = null;
-let unlistenBatchFailed: (() => void) | null = null;
-
-onMounted(async () => {
-  unlistenBatchCompleted = await listen<{ downloadPath: string }>(
-    'batch-download-completed',
-    (event) => {
-      const downloadPath = event.payload.downloadPath;
-      ElMessage.success('批量下载完成！');
-      ElMessageBox.confirm('下载已完成，是否打开下载文件夹？', '下载完成', {
-        confirmButtonText: '打开文件夹',
-        cancelButtonText: '关闭',
-        type: 'success',
-      })
-        .then(() => {
-          invoke('open_download_folder_prompt', { downloadPath }).catch((err) =>
-            console.error('打开下载文件夹失败:', err)
-          );
-        })
-        .catch(() => {
-          /* 用户选择不打开 */
-        });
-    }
-  );
-
-  unlistenBatchFailed = await listen('batch-download-failed', () => {
-    ElMessage.error('部分文件下载失败，请检查网络连接后重试。');
-  });
-
-  loadCategories().catch((error) => {
-    console.error('获取课本分类失败:', error);
-    ElMessage.error('获取课本分类出错');
-  });
-});
-
-onUnmounted(() => {
-  unlistenBatchCompleted?.();
-  unlistenBatchFailed?.();
+onMounted(() => {
+  // 批量下载完成/失败提示由 App.vue 全局统一处理，此处不再注册，避免 keep-alive 下重复弹窗
+  loadCategories()
+    .then((list) => {
+      // 首次进入自动选中第一个分类，避免页面空白
+      if (!categoryId.value && list.length > 0) {
+        categoryId.value = list[0].value;
+      }
+    })
+    .catch((error) => {
+      console.error('获取课本分类失败:', error);
+      ElMessage.error('获取课本分类出错');
+    });
 });
 </script>
 
 <template>
   <div class="page-shell" v-loading="isLoading">
     <div class="toolbar">
-      <el-breadcrumb class="crumbs" separator="/">
-        <el-breadcrumb-item v-for="(item, index) in breadcrumbItems" :key="index" :to="item.path">
-          {{ item.title }}
-        </el-breadcrumb-item>
-      </el-breadcrumb>
-
       <div class="filters">
+        <el-select v-model="categoryId" class="filter-select" placeholder="选择分类">
+          <el-option v-for="item in categories" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+
         <el-select v-model="subject" class="filter-select" :placeholder="'选择' + subjectLabel"
           :disabled="noCategorySelected">
           <el-option v-for="item in subjects" :key="item.value" :label="item.label" :value="item.value" />
@@ -227,11 +190,6 @@ onUnmounted(() => {
   background-color: var(--secondary-bg-color);
   border-bottom: 1px solid var(--border-color);
   transition: background-color 0.2s, border-color 0.2s;
-}
-
-.crumbs {
-  margin-bottom: 10px;
-  font-size: 12px;
 }
 
 .filters {

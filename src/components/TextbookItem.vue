@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { ElButton, ElProgress, ElMessage } from 'element-plus';
-import { Download, Picture, Check, Close, StarFilled, View, Loading } from '@element-plus/icons-vue';
+import { Download, Picture, Check, Close, StarFilled, View, Loading, Refresh, FolderOpened, Document } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useDownload } from '@/composables/useDownloadManager';
 import { useCoverImage } from '@/composables/useCoverImage';
@@ -77,6 +77,28 @@ const handleCancel = () => {
     });
 };
 
+// 打开已下载的文件（用系统默认程序，如 PDF 阅读器）
+const openFile = () => {
+  if (!download.filePath) {
+    ElMessage.warning('文件路径未知，无法打开');
+    return;
+  }
+  invoke('open_file', { path: download.filePath }).catch((error) => {
+    ElMessage.error('打开失败: ' + error);
+  });
+};
+
+// 在文件管理器中定位到已下载的文件
+const revealFile = () => {
+  if (!download.filePath) {
+    ElMessage.warning('文件路径未知，无法定位');
+    return;
+  }
+  invoke('reveal_file', { path: download.filePath }).catch((error) => {
+    ElMessage.error('打开文件夹失败: ' + error);
+  });
+};
+
 const likeCountText = computed(() => formatCount(props.textbook.like_count));
 const totalUvText = computed(() => formatCount(props.textbook.total_uv));
 </script>
@@ -150,22 +172,34 @@ const totalUvText = computed(() => formatCount(props.textbook.total_uv));
       </div>
 
       <div class="actions">
-        <el-button @click="handleDownload" size="default"
+        <el-button @click="handleDownload" size="small"
           :type="download.status === 'completed' ? 'success' : 'primary'"
-          :disabled="download.status === 'downloading' || download.status === 'completed'"
+          :disabled="download.status === 'downloading'"
           :loading="download.status === 'downloading'">
           <el-icon class="mr-1" v-if="download.status !== 'downloading'">
-            <Download v-if="download.status !== 'completed'" />
-            <Check v-else />
+            <Refresh v-if="download.status === 'completed'" />
+            <Download v-else />
           </el-icon>
           {{
             download.status === 'downloading' ? '下载中...' :
-              download.status === 'completed' ? '已下载' :
+              download.status === 'completed' ? '重新下载' :
                 download.status === 'failed' ? '重试下载' : '下载'
           }}
         </el-button>
-        <el-button v-if="download.status === 'downloading'" @click="handleCancel" size="default" type="danger" plain>
+        <el-button v-if="download.status === 'downloading'" @click="handleCancel" size="small" type="danger" plain>
           取消
+        </el-button>
+        <el-button v-if="download.status === 'completed'" @click="openFile" size="small" type="primary" plain>
+          <el-icon class="mr-1">
+            <Document />
+          </el-icon>
+          预览
+        </el-button>
+        <el-button v-if="download.status === 'completed'" @click="revealFile" size="small" plain>
+          <el-icon class="mr-1">
+            <FolderOpened />
+          </el-icon>
+          打开文件夹
         </el-button>
       </div>
     </div>
@@ -313,8 +347,9 @@ html.dark .tb-card:hover {
   margin-top: auto;
   padding-top: 12px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .actions .el-button + .el-button {

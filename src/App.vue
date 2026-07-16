@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onUnmounted, onMounted, provide } from 'vue';
-import { ElContainer, ElHeader, ElAside, ElMain, ElMessage } from 'element-plus';
-import { Sunny, Moon, QuestionFilled } from '@element-plus/icons-vue';
+import { ElContainer, ElHeader, ElAside, ElMain, ElMessage, ElMessageBox } from 'element-plus';
+import { Sunny, Moon, QuestionFilled, Setting } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
@@ -70,6 +70,10 @@ provide('toggleTheme', toggleTheme);
 
 // 登录窗口捕获的令牌在应用层持久化，避免用户离开设置页后丢失
 let unlistenTokenCaptured: UnlistenFn | null = null;
+// 批量下载完成/失败提示收敛到全局唯一一处：两个下载页都被 keep-alive 缓存，
+// 若各自监听会导致提示弹出多次
+let unlistenBatchCompleted: UnlistenFn | null = null;
+let unlistenBatchFailed: UnlistenFn | null = null;
 
 onMounted(async () => {
   isDarkMode.value = localStorage.getItem(STORAGE_KEYS.theme) === 'dark';
@@ -89,6 +93,31 @@ onMounted(async () => {
       ElMessage.success('已自动获取 Access Token 并保存');
     }
   );
+
+  unlistenBatchCompleted = await listen<{ downloadPath: string }>(
+    'batch-download-completed',
+    (event) => {
+      const downloadPath = event.payload.downloadPath;
+      ElMessage.success('批量下载完成！');
+      ElMessageBox.confirm('下载已完成，是否打开下载文件夹？', '下载完成', {
+        confirmButtonText: '打开文件夹',
+        cancelButtonText: '关闭',
+        type: 'success',
+      })
+        .then(() => {
+          invoke('open_download_folder_prompt', { downloadPath }).catch((err) =>
+            console.error('打开下载文件夹失败:', err)
+          );
+        })
+        .catch(() => {
+          /* 用户选择不打开 */
+        });
+    }
+  );
+
+  unlistenBatchFailed = await listen('batch-download-failed', () => {
+    ElMessage.error('部分文件下载失败，请检查网络连接后重试。');
+  });
 });
 
 const handleRightClick = (event: MouseEvent) => {
@@ -111,6 +140,10 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
   unlistenTokenCaptured?.();
   unlistenTokenCaptured = null;
+  unlistenBatchCompleted?.();
+  unlistenBatchCompleted = null;
+  unlistenBatchFailed?.();
+  unlistenBatchFailed = null;
 });
 
 </script>
@@ -120,7 +153,7 @@ onUnmounted(() => {
     <el-container class="h-screen w-screen">
 
       <el-header height="56px" class="app-header">
-        <div class="flex items-center min-w-0">
+        <div class="flex items-center min-w-0 header-brand" @click="router.push('/')">
           <img src="/icon.png" alt="Logo" class="h-8 w-8 mr-3 shrink-0" @contextmenu.prevent>
           <div class="min-w-0">
             <div class="app-title">国家中小学智慧教育平台</div>
@@ -143,6 +176,13 @@ onUnmounted(() => {
               </el-icon>
             </button>
           </el-tooltip>
+          <el-tooltip content="设置" placement="bottom">
+            <button class="header-icon-btn" type="button" @click="router.push('/settings')">
+              <el-icon :size="18">
+                <Setting />
+              </el-icon>
+            </button>
+          </el-tooltip>
           <el-tooltip content="GitHub 仓库" placement="bottom">
             <button class="header-icon-btn" type="button" @click="openGitHub">
               <svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true">
@@ -161,7 +201,12 @@ onUnmounted(() => {
         <div class="resize-handle" :class="{ 'is-resizing': isResizing }" @mousedown="startDragging"></div>
 
         <el-main class="app-main">
-          <router-view></router-view>
+          <!-- 只缓存两个下载页，保留搜索结果/解析列表等状态；设置/帮助每次重新加载 -->
+          <router-view v-slot="{ Component }">
+            <keep-alive :include="['TextbookDownloadPage', 'CourseDownloadPage']">
+              <component :is="Component" />
+            </keep-alive>
+          </router-view>
         </el-main>
       </el-container>
 
@@ -178,6 +223,19 @@ onUnmounted(() => {
   background-color: var(--secondary-bg-color);
   border-bottom: 1px solid var(--border-color);
   transition: background-color 0.2s, border-color 0.2s;
+}
+
+/* 点击品牌区回到首页 */
+.header-brand {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin-left: -8px;
+  transition: background-color 0.15s;
+}
+
+.header-brand:hover {
+  background-color: var(--hover-bg);
 }
 
 .app-title {

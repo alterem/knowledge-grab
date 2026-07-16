@@ -64,6 +64,7 @@ pub fn run() {
             login::open_login_window,
             system::open_download_folder_prompt,
             system::open_file,
+            system::reveal_file,
             system::open_url
         ])
         .run(tauri::generate_context!());

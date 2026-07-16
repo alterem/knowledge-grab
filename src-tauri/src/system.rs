@@ -64,6 +64,38 @@ pub async fn open_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// 在系统文件管理器中定位并选中文件（找不到文件时退回打开其所在目录）
+#[allow(unused_variables)]
+#[tauri::command]
+pub async fn reveal_file(path: String) -> Result<(), String> {
+    let file = Path::new(&path);
+    if !file.exists() {
+        // 文件已被删/移走时，退回打开父目录
+        if let Some(parent) = file.parent().map(|p| p.to_string_lossy().into_owned()) {
+            return open_folder(&parent);
+        }
+        return Err(format!("文件不存在: {path}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    spawn_command("explorer", &["/select,", &path])?;
+
+    #[cfg(target_os = "macos")]
+    spawn_command("open", &["-R", &path])?;
+
+    #[cfg(target_os = "linux")]
+    {
+        // 多数 Linux 文件管理器不支持"选中"，直接打开父目录
+        let parent = file
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .ok_or("无法确定父目录")?;
+        open_folder(&parent)?;
+    }
+
+    Ok(())
+}
+
 #[allow(unused_variables)]
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
