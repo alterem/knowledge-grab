@@ -215,12 +215,22 @@ fn pick_video_url(ti_items: &[Value]) -> Option<String> {
     first_storage(chosen)
 }
 
-// 从 ti_items 里挑课件文档的直链：优先 ti_file_flag=="href" 的源文件。
+// 从 ti_items 里挑课件文档的直链：优先 ti_file_flag=="href"，其次 "source"
+// （基础作业等 special_edu 文档用 source 标源 PDF）。兜底跳过 folder 目录项，
+// 其地址不可直接下载（403 会被误报成 token 失效）。
 fn pick_file_url(ti_items: &[Value]) -> Option<String> {
+    let flag_is = |it: &&Value, v: &str| {
+        it.get("ti_file_flag").and_then(Value::as_str) == Some(v)
+    };
     let chosen = ti_items
         .iter()
-        .find(|it| it.get("ti_file_flag").and_then(Value::as_str) == Some("href"))
-        .or_else(|| ti_items.first())?;
+        .find(|it| flag_is(it, "href"))
+        .or_else(|| ti_items.iter().find(|it| flag_is(it, "source")))
+        .or_else(|| {
+            ti_items
+                .iter()
+                .find(|it| it.get("ti_format").and_then(Value::as_str) != Some("folder"))
+        })?;
 
     first_storage(chosen)
 }
