@@ -51,13 +51,19 @@ pub fn run() {
             downloader::download_textbook,
             downloader::batch_download_textbooks,
             downloader::cancel_download,
+            downloader::download_course_resource,
+            downloader::batch_download_course_resources,
+            downloader::check_ffmpeg,
             api::fetch_textbooks,
             api::fetch_filter_options,
             api::fetch_textbook_categories,
             api::fetch_cover,
+            api::fetch_image,
+            api::courses::parse_course_url,
             api::clear_tch_material_tag_cache,
             login::open_login_window,
             system::open_download_folder_prompt,
+            system::open_file,
             system::open_url
         ])
         .run(tauri::generate_context!());

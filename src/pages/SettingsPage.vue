@@ -42,6 +42,37 @@
               </div>
             </div>
           </el-form-item>
+          <el-form-item label="MAC Key">
+            <div class="w-full">
+              <div class="flex items-center w-full space-x-2">
+                <el-input v-model="macKey" placeholder="可选：部分需鉴权的课件下载才用到，「登录平台自动获取」会一并抓取"
+                  show-password clearable class="flex-1"></el-input>
+              </div>
+              <div class="mt-1 text-xs form-hint">
+                与 Access Token 同源，仅少数需要二次鉴权的课件下载会用到。上方「登录平台自动获取」会连同令牌一起抓取，或
+                <el-button link type="primary" size="small" @click="showMacKeyHelp = !showMacKeyHelp">
+                  {{ showMacKeyHelp ? '收起手动获取步骤' : '查看手动获取步骤' }}
+                </el-button>
+              </div>
+              <div v-if="showMacKeyHelp" class="token-help">
+                <ol class="token-steps">
+                  <li>浏览器访问 <code>https://basic.smartedu.cn</code> 并登录（没有账号需先注册）</li>
+                  <li>按 <kbd>F12</kbd>（或右键 → 检查）打开开发者工具，切换到「控制台 / Console」</li>
+                  <li>粘贴以下代码并回车，复制输出的 MAC Key 填入上方输入框</li>
+                </ol>
+                <pre class="token-script select-text">{{ tokenScript }}</pre>
+                <div class="token-help-footer">
+                  <el-button size="small" @click="copyTokenScript">
+                    <el-icon class="mr-1">
+                      <CopyDocument />
+                    </el-icon>
+                    复制代码
+                  </el-button>
+                  <span class="form-hint">与令牌同步过期，失效后重新获取即可</span>
+                </div>
+              </div>
+            </div>
+          </el-form-item>
           <el-form-item label="下载路径">
             <div class="flex items-center w-full space-x-2">
               <el-input v-model="downloadPath" placeholder="请选择下载路径" :readonly="true" class="flex-1"></el-input>
@@ -53,6 +84,37 @@
           </el-form-item>
           <el-form-item label="按分类保存">
             <el-switch v-model="saveByCategory" />
+          </el-form-item>
+          <el-form-item label="ffmpeg 路径">
+            <div class="w-full">
+              <div class="flex items-center w-full space-x-2">
+                <el-input v-model="ffmpegPath" placeholder="可选：配置后视频将合成为 .mp4，留空则保存为 .ts"
+                  clearable class="flex-1"></el-input>
+                <el-button @click="selectFfmpegPath">选择文件</el-button>
+                <el-button @click="checkFfmpeg" :loading="checkingFfmpeg">检测</el-button>
+              </div>
+              <div class="mt-1 text-xs form-hint">
+                下载的课程视频是加密的 TS 切片，本工具会自动解密。配置 ffmpeg 后可无损合成为标准 .mp4；
+                未配置时保存为可直接播放的 .ts 文件。
+                <el-button link type="primary" size="small" @click="showFfmpegHelp = !showFfmpegHelp">
+                  {{ showFfmpegHelp ? '收起下载指引' : '如何获取 ffmpeg？' }}
+                </el-button>
+              </div>
+              <div v-if="showFfmpegHelp" class="token-help">
+                <ol class="token-steps">
+                  <li>
+                    访问 ffmpeg 官网下载页
+                    <el-button link type="primary" size="small" @click="openFfmpegSite">
+                      ffmpeg.org/download
+                    </el-button>
+                    ，选择对应系统的构建版本
+                  </li>
+                  <li>macOS 可用 <code>brew install ffmpeg</code>，Windows 下载后解压得到 <code>ffmpeg.exe</code></li>
+                  <li>点击上方「选择文件」定位到 ffmpeg 可执行文件，或直接填入其完整路径</li>
+                  <li>点击「检测」确认可用后保存</li>
+                </ol>
+              </div>
+            </div>
           </el-form-item>
         </el-form>
       </section>
@@ -106,20 +168,27 @@ const isDarkMode = inject('isDarkMode') as Ref<boolean>;
 const toggleTheme = inject('toggleTheme') as () => void;
 
 const apiToken = ref('');
+const macKey = ref('');
 const downloadPath = ref('');
 const threadCount = ref(4);
 const saveByCategory = ref(false);
 const clearingCache = ref(false);
 const showTokenHelp = ref(false);
+const showMacKeyHelp = ref(false);
+const ffmpegPath = ref('');
+const showFfmpegHelp = ref(false);
+const checkingFfmpeg = ref(false);
 
-// 从 smartedu.cn 的 localStorage 读取登录令牌（"...&token" 键里的 access_token）
+// 从 smartedu.cn 的 localStorage 读取登录凭据（"...&token" 键的 value 里含 access_token 与 mac_key）。
+// access_token 用于所有下载鉴权；mac_key 供视频课件的 doc-center 签名下载使用。
 const tokenScript = `(function () {
   const key = Object.keys(localStorage).find(
     (k) => k.startsWith("ND_UC_AUTH") && k.endsWith("&token")
   );
-  if (!key) { console.error("未找到 Access Token，请确认已登录！"); return; }
-  const token = JSON.parse(JSON.parse(localStorage.getItem(key)).value).access_token;
-  console.log("%cAccess Token:", "color: green; font-weight: bold", token);
+  if (!key) { console.error("未找到登录凭据，请确认已登录！"); return; }
+  const value = JSON.parse(JSON.parse(localStorage.getItem(key)).value);
+  console.log("%cAccess Token:", "color: green; font-weight: bold", value.access_token);
+  console.log("%cMAC Key:", "color: green; font-weight: bold", value.mac_key || "(无)");
 })();`;
 
 const copyTokenScript = async () => {
@@ -146,15 +215,21 @@ let unlistenTokenCaptured: UnlistenFn | null = null;
 
 onMounted(async () => {
   apiToken.value = localStorage.getItem(STORAGE_KEYS.token) || '';
+  macKey.value = localStorage.getItem(STORAGE_KEYS.macKey) || '';
   downloadPath.value = localStorage.getItem(STORAGE_KEYS.downloadPath) || '';
   threadCount.value = parseInt(localStorage.getItem(STORAGE_KEYS.threadCount) || '4', 10);
   saveByCategory.value = localStorage.getItem(STORAGE_KEYS.saveByCategory) === 'true';
+  ffmpegPath.value = localStorage.getItem(STORAGE_KEYS.ffmpegPath) || '';
 
   // 令牌的持久化由 App.vue 全局处理，这里只在设置页打开时同步输入框显示
-  unlistenTokenCaptured = await listen<{ token: string }>('access-token-captured', (event) => {
-    const token = event.payload?.token;
-    if (token) apiToken.value = token;
-  });
+  unlistenTokenCaptured = await listen<{ token: string; mac_key?: string }>(
+    'access-token-captured',
+    (event) => {
+      const token = event.payload?.token;
+      if (token) apiToken.value = token;
+      if (event.payload?.mac_key) macKey.value = event.payload.mac_key;
+    }
+  );
 });
 
 onUnmounted(() => {
@@ -199,10 +274,49 @@ const clearCache = async () => {
   }
 };
 
+const selectFfmpegPath = async () => {
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    defaultPath: ffmpegPath.value || undefined,
+  });
+  if (selected !== null && typeof selected === 'string') {
+    ffmpegPath.value = selected;
+  }
+};
+
+const checkFfmpeg = async () => {
+  if (!ffmpegPath.value) {
+    ElMessage.warning('请先填写或选择 ffmpeg 路径');
+    return;
+  }
+  checkingFfmpeg.value = true;
+  try {
+    const ok = await invoke<boolean>('check_ffmpeg', { path: ffmpegPath.value });
+    if (ok) {
+      ElMessage.success('ffmpeg 可用，视频将自动转封装为 MP4');
+    } else {
+      ElMessage.error('无法运行该路径的 ffmpeg，请检查是否填写正确');
+    }
+  } catch (error) {
+    ElMessage.error('检测失败: ' + error);
+  } finally {
+    checkingFfmpeg.value = false;
+  }
+};
+
+const openFfmpegSite = () => {
+  invoke('open_url', { url: 'https://ffmpeg.org/download.html' }).catch((err) =>
+    console.error('打开链接失败:', err)
+  );
+};
+
 const saveSettings = () => {
   localStorage.setItem(STORAGE_KEYS.token, apiToken.value);
+  localStorage.setItem(STORAGE_KEYS.macKey, macKey.value.trim());
   localStorage.setItem(STORAGE_KEYS.threadCount, threadCount.value.toString());
   localStorage.setItem(STORAGE_KEYS.saveByCategory, saveByCategory.value.toString());
+  localStorage.setItem(STORAGE_KEYS.ffmpegPath, ffmpegPath.value.trim());
 
   if (downloadPath.value) {
     localStorage.setItem(STORAGE_KEYS.downloadPath, downloadPath.value);

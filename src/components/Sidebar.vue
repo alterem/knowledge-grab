@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMenu, ElMenuItem, ElSubMenu, ElIcon } from 'element-plus';
-import { House, Tools, ChatRound, QuestionFilled } from '@element-plus/icons-vue';
+import { House, Tools, ChatRound, QuestionFilled, VideoCamera } from '@element-plus/icons-vue';
 import { useRouter, useRoute } from 'vue-router';
 import { computed, onMounted, ref, markRaw, type Component } from 'vue';
 import { useCategories } from '@/composables/useCategories';
@@ -26,9 +26,10 @@ interface MenuItem {
 
 const menuItems = ref<MenuItem[]>([
   { index: '1', title: '课本下载', icon: markRaw(House), path: '/textbook-download', children: [] },
-  { index: '2', title: '设置', icon: markRaw(Tools), path: '/settings' },
-  { index: '3', title: '免责声明', icon: markRaw(ChatRound), path: '/disclaimer' },
-  { index: '4', title: '关于/帮助', icon: markRaw(QuestionFilled), path: '/help' },
+  { index: '2', title: '课程&视频下载', icon: markRaw(VideoCamera), path: '/course-download' },
+  { index: '3', title: '设置', icon: markRaw(Tools), path: '/settings' },
+  { index: '4', title: '免责声明', icon: markRaw(ChatRound), path: '/disclaimer' },
+  { index: '5', title: '关于&帮助', icon: markRaw(QuestionFilled), path: '/help' },
 ]);
 
 const textbookChildren = computed(() => menuItems.value[0].children ?? []);

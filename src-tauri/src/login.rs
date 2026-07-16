@@ -15,7 +15,8 @@ const LIGHT_BG: Color = Color(0xff, 0xff, 0xff, 0xff);
 
 pub const TOKEN_CAPTURED_EVENT: &str = "access-token-captured";
 
-// 轮询 localStorage，等平台写入未过期的 "ND_UC_AUTH-...&token" 后回传 access_token
+// 轮询 localStorage，等平台写入未过期的 "ND_UC_AUTH-...&token" 后回传 access_token 与 mac_key
+// （二者是 entry.value 里的兄弟字段；mac_key 供视频课件的 doc-center 签名下载使用）
 const TOKEN_POLL_SCRIPT: &str = r#"
 (function () {
   if (window.__KG_TOKEN_POLL__) { return; }
@@ -29,10 +30,13 @@ const TOKEN_POLL_SCRIPT: &str = r#"
       var entry = JSON.parse(localStorage.getItem(key));
       // 跳过上次登录残留的过期令牌，等待平台刷新
       if (entry.expire && entry.expire < Date.now() + 60000) { return; }
-      var token = JSON.parse(entry.value).access_token;
+      var value = JSON.parse(entry.value);
+      var token = value.access_token;
+      var macKey = value.mac_key || "";
       if (token) {
         clearInterval(timer);
-        window.location.href = "https://smartedu-token.callback/#" + encodeURIComponent(token);
+        window.location.href = "https://smartedu-token.callback/#token=" +
+          encodeURIComponent(token) + "&mac_key=" + encodeURIComponent(macKey);
       }
     } catch (e) { /* 尚未登录，继续轮询 */ }
   }, 1000);
@@ -77,21 +81,33 @@ pub fn open_login_window(app_handle: tauri::AppHandle, is_dark: Option<bool>) ->
             return true;
         }
 
-        let token = url
-            .fragment()
-            .map(|fragment| {
-                percent_encoding::percent_decode_str(fragment)
+        // fragment 形如 "token=xxx&mac_key=yyy"，逐对百分号解码
+        let (mut token, mut mac_key) = (String::new(), String::new());
+        if let Some(fragment) = url.fragment() {
+            for pair in fragment.split('&') {
+                let Some((k, v)) = pair.split_once('=') else {
+                    continue;
+                };
+                let decoded = percent_encoding::percent_decode_str(v)
                     .decode_utf8_lossy()
-                    .into_owned()
-            })
-            .unwrap_or_default();
+                    .into_owned();
+                match k {
+                    "token" => token = decoded,
+                    "mac_key" => mac_key = decoded,
+                    _ => {}
+                }
+            }
+        }
 
         // 在导航回调外发事件并关窗，避免 webview 导航中的重入问题
         let app = nav_handle.clone();
         tauri::async_runtime::spawn(async move {
             if !token.is_empty() {
                 log::info!("已从登录窗口捕获 Access Token");
-                let _ = app.emit(TOKEN_CAPTURED_EVENT, json!({ "token": token }));
+                let _ = app.emit(
+                    TOKEN_CAPTURED_EVENT,
+                    json!({ "token": token, "mac_key": mac_key }),
+                );
             }
             if let Some(window) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
                 let _ = window.close();

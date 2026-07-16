@@ -1,4 +1,5 @@
 pub mod books;
+pub mod courses;
 pub mod tags;
 
 use crate::http;
@@ -113,5 +114,16 @@ pub async fn fetch_cover(book_id: String, fallback_url: String) -> Result<String
         return Err("无可用封面".to_string());
     }
     let bytes = http::get_bytes(&fallback_url).await?;
+    Ok(STANDARD.encode(&bytes))
+}
+
+// 通用图片代理：拉取任意公开图片转 base64，供前端 <img> 直接用。
+// 课程封面在公开桶，无需鉴权，但和教材封面一样在 webview 里直连不可靠，故走后端。
+#[command]
+pub async fn fetch_image(url: String) -> Result<String, String> {
+    if url.is_empty() {
+        return Err("无图片地址".to_string());
+    }
+    let bytes = http::get_bytes(&url).await?;
     Ok(STANDARD.encode(&bytes))
 }

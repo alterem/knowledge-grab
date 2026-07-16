@@ -81,6 +81,27 @@
         </section>
 
         <section class="help-card">
+          <h2 class="section-title">示例链接</h2>
+          <p class="mb-3 page-desc">
+            在「课程&视频下载」页粘贴课程页链接即可解析下载。下面是两个可直接试用的示例，点右侧按钮复制：
+          </p>
+          <div class="sample-list">
+            <div v-for="sample in sampleLinks" :key="sample.url" class="sample-item">
+              <div class="sample-info">
+                <div class="sample-name">{{ sample.name }}</div>
+                <div class="sample-url" :title="sample.url">{{ sample.url }}</div>
+              </div>
+              <el-button size="small" plain @click="copyLink(sample.url)">
+                <el-icon class="mr-1">
+                  <DocumentCopy />
+                </el-icon>
+                复制
+              </el-button>
+            </div>
+          </div>
+        </section>
+
+        <section class="help-card">
           <h2 class="section-title">常见问题</h2>
 
           <div class="mb-4">
@@ -152,8 +173,8 @@
 </template>
 
 <script setup lang="ts">
-import { ElButton, ElIcon } from 'element-plus';
-import { ChatDotRound } from '@element-plus/icons-vue';
+import { ElButton, ElIcon, ElMessage } from 'element-plus';
+import { ChatDotRound, DocumentCopy } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
 
 const GITHUB_URL = 'https://github.com/alterem/knowledge-grab';
@@ -163,6 +184,26 @@ const openGitHub = async (path = '') => {
     await invoke('open_url', { url: GITHUB_URL + path });
   } catch (error) {
     console.error('无法打开 GitHub 链接:', error);
+  }
+};
+
+const sampleLinks = [
+  {
+    name: '同步课堂 · 基础作业（课件文档）',
+    url: 'https://basic.smartedu.cn/syncClassroom/basicWork/detail?contentType=assets_document&contentId=62044dd6-2ee9-454e-9db5-66693a302b70&catalogType=basicWork',
+  },
+  {
+    name: '同步课堂 · 课程视频',
+    url: 'https://basic.smartedu.cn/syncClassroom/classActivity?activityId=d1a57023-9b85-11ec-92ef-246e9675e50c&chapterId=4d1209f1-5a80-3f36-bde5-2c06685bf769&teachingmaterialId=cd5b8173-914b-40fd-b48c-d2bf77c00c4a&fromPrepare=0',
+  },
+];
+
+const copyLink = async (link: string) => {
+  try {
+    await navigator.clipboard.writeText(link);
+    ElMessage.success('链接已复制，粘贴到「课程 / 视频下载」页即可使用');
+  } catch {
+    ElMessage.error('复制失败，请重试');
   }
 };
 </script>
@@ -227,5 +268,40 @@ const openGitHub = async (path = '') => {
 
 .support-actions .el-button + .el-button {
   margin-left: 0;
+}
+
+.sample-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sample-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-color);
+}
+
+.sample-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.sample-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.sample-url {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

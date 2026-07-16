@@ -44,6 +44,26 @@ pub async fn open_download_folder_prompt(download_path: String) -> Result<(), St
     open_folder(&download_path)
 }
 
+// 用系统默认程序打开文件（下载完成的视频/课件点击播放/查看）
+#[allow(unused_variables)]
+#[tauri::command]
+pub async fn open_file(path: String) -> Result<(), String> {
+    if !Path::new(&path).exists() {
+        return Err(format!("文件不存在: {path}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    spawn_command("cmd", &["/C", "start", "", &path])?;
+
+    #[cfg(target_os = "macos")]
+    spawn_command("open", &[&path])?;
+
+    #[cfg(target_os = "linux")]
+    spawn_command("xdg-open", &[&path])?;
+
+    Ok(())
+}
+
 #[allow(unused_variables)]
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {

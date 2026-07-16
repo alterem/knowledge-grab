@@ -11,7 +11,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+pub(super) const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 // 进度事件按下载量节流，写文件用缓冲减少 syscall
 const PROGRESS_UPDATE_THRESHOLD: u64 = 1024 * 1024;
 const WRITE_BUFFER_SIZE: usize = 512 * 1024;
@@ -56,7 +56,7 @@ impl DownloadEventEmitter {
         let _ = self.app_handle.emit("download-status", event_data);
     }
 
-    fn emit_progress(&self, progress: u32) {
+    pub(super) fn emit_progress(&self, progress: u32) {
         let _ = self.app_handle.emit(
             "download-progress",
             json!({
@@ -66,7 +66,7 @@ impl DownloadEventEmitter {
         );
     }
 
-    fn emit_completed(&self, file_path: &str) {
+    pub(super) fn emit_completed(&self, file_path: &str) {
         let _ = self.app_handle.emit(
             "download-status",
             json!({
@@ -296,5 +296,98 @@ pub(super) async fn run(
     let file_path_str = save_path.to_string_lossy().into_owned();
     emitter.emit_completed(&file_path_str);
 
+    Ok(file_path_str)
+}
+
+// 文件名/目录名清洗：去掉路径非法字符，避免拼接出非法路径
+fn sanitize_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\n' | '\r' | '\t' => '_',
+            _ => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "未命名".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 下载单个课程资源：视频走 m3u8 解密流程，其余走普通流式下载。
+/// 事件以 resource.download_url 为键，与前端下载状态仓库对应。
+pub(super) async fn run_course(
+    app_handle: tauri::AppHandle,
+    resource: crate::models::CourseDownloadInfo,
+    token: Option<String>,
+    download_path: String,
+    ffmpeg_path: Option<String>,
+    cancellation_token: CancellationToken,
+) -> Result<String, String> {
+    let url = resource.download_url.clone();
+    log::info!("开始下载课程资源《{}》: {url}", resource.title);
+
+    if cancellation_token.is_cancelled() {
+        return Err("下载已取消".to_string());
+    }
+    if download_path.is_empty() {
+        return Err("未设置下载路径".to_string());
+    }
+
+    let emitter = DownloadEventEmitter::new(app_handle, url.clone());
+    emitter.emit_status(DownloadStatus::Downloading, 0);
+
+    // 同一课程的多个资源归到以课程标题命名的子目录
+    let mut base_save_path = PathBuf::from(&download_path);
+    if let Some(course) = resource.course_title.as_deref().filter(|s| !s.is_empty()) {
+        base_save_path.push(sanitize_name(course));
+    }
+    if !base_save_path.exists() {
+        fs::create_dir_all(&base_save_path)
+            .await
+            .map_err(|e| format!("创建下载目录失败: {e}"))?;
+    }
+
+    let title = sanitize_name(&resource.title);
+    let ext = if resource.format.is_empty() {
+        "bin".to_string()
+    } else {
+        resource.format.clone()
+    };
+    let save_path = base_save_path.join(format!("{title}.{ext}"));
+
+    let final_path = if resource.is_video {
+        // 视频合成后的真实路径可能是 .mp4（ffmpeg 转封装成功）或 .ts（回退）
+        super::m3u8::download(
+            &url,
+            token.as_deref(),
+            &save_path,
+            ffmpeg_path.as_deref(),
+            &cancellation_token,
+            &emitter,
+        )
+        .await?
+    } else {
+        let parsed = Url::parse(&url).map_err(|e| format!("无效的 URL: {e}"))?;
+        let response = send_request(&parsed, token.as_deref()).await.inspect_err(|e| {
+            emitter.emit_status(DownloadStatus::Failed(e.clone()), 0);
+        })?;
+        let total_size = response.content_length();
+        process_download_stream(
+            response.bytes_stream(),
+            &save_path,
+            total_size,
+            &cancellation_token,
+            &emitter,
+        )
+        .await?;
+        save_path
+    };
+
+    log::info!("课程资源下载完成: {}", final_path.display());
+    let file_path_str = final_path.to_string_lossy().into_owned();
+    emitter.emit_completed(&file_path_str);
     Ok(file_path_str)
 }

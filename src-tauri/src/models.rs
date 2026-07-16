@@ -23,6 +23,39 @@ pub struct Textbook {
     pub download_url: String,
 }
 
+// 一个课程 URL 解析后得到的资源（可能是视频，也可能是课件文档）。
+// 前端据此展示列表并逐个下载。
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseResource {
+    pub id: String,
+    pub title: String,
+    // 文件后缀名（不含点），如 mp4 / pdf / pptx；视频统一标记为 mp4
+    pub format: String,
+    // m3u8 播放列表地址（视频）或文件直链（课件）
+    pub download_url: String,
+    // true 表示需要 m3u8 解密下载流程，false 表示直接流式下载
+    pub is_video: bool,
+    pub cover_url: String,
+}
+
+// 一个课程解析结果：课程标题 + 其下的资源清单
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseParseResult {
+    pub title: String,
+    pub resources: Vec<CourseResource>,
+}
+
+// 前端发起课程资源下载时回传的信息
+#[derive(Debug, Clone, Deserialize)]
+pub struct CourseDownloadInfo {
+    pub download_url: String,
+    pub title: String,
+    pub format: String,
+    pub is_video: bool,
+    // 课程标题，用作保存子目录（同一课程的多个资源归在一起）
+    pub course_title: Option<String>,
+}
+
 // 只保留实际用到的字段，几千条书目反序列化后能省不少内存
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct CustomProperties {

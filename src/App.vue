@@ -78,12 +78,17 @@ onMounted(async () => {
   document.addEventListener('contextmenu', handleRightClick);
   window.addEventListener('keydown', handleKeydown);
 
-  unlistenTokenCaptured = await listen<{ token: string }>('access-token-captured', (event) => {
-    const token = event.payload?.token;
-    if (!token) return;
-    localStorage.setItem(STORAGE_KEYS.token, token);
-    ElMessage.success('已自动获取 Access Token 并保存');
-  });
+  unlistenTokenCaptured = await listen<{ token: string; mac_key?: string }>(
+    'access-token-captured',
+    (event) => {
+      const token = event.payload?.token;
+      if (!token) return;
+      localStorage.setItem(STORAGE_KEYS.token, token);
+      // mac_key 与 token 同源，一并保存（部分课件下载需要）
+      localStorage.setItem(STORAGE_KEYS.macKey, event.payload?.mac_key ?? '');
+      ElMessage.success('已自动获取 Access Token 并保存');
+    }
+  );
 });
 
 const handleRightClick = (event: MouseEvent) => {
