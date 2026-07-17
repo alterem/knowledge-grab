@@ -9,6 +9,8 @@
     "core:default",
     "core:window:allow-set-theme",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "updater:default",
+    "process:default"
   ]
 }

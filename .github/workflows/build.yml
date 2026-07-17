@@ -30,12 +30,14 @@ jobs:
             bundle: |
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             artifact: windows-arm64
             bundle: |
               src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi
               src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: linux-x64
@@ -43,11 +45,17 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: macos-arm64
-            bundle: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            bundle: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: macos-x64
-            bundle: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            bundle: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -63,6 +71,18 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      # 发版 tag 必须与 tauri.conf.json 的 version 一致，否则 updater 版本比较会错乱
+      - name: Verify Version Matches Tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 tauri.conf.json version=${CONF_VERSION} 不一致，请先统一版本号再打 tag"
+            exit 1
+          fi
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -89,8 +109,12 @@ jobs:
           Remove-Item -Path "$env:LOCALAPPDATA\tauri\WixTools*" -Recurse -Force -ErrorAction SilentlyContinue
         shell: pwsh
 
+      # tag 构建追加 updater 配置（createUpdaterArtifacts 需要签名私钥，PR 构建不启用以免无 secrets 失败）
       - name: Build (${{ matrix.target }})
-        run: pnpm tauri build --target ${{ matrix.target }}
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--config src-tauri/tauri.updater.conf.json' || '' }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v6
@@ -143,19 +167,33 @@ jobs:
       - name: List Files
         run: find artifacts -type f | sort
 
+      # 生成 updater 静态清单（同时把两个 macOS 架构的同名 .app.tar.gz 重命名去重）
+      - name: Generate Updater Manifest
+        env:
+          RELEASE_NOTES: ${{ steps.changelog.outputs.CHANGELOG }}
+        run: node scripts/generate-latest-json.mjs artifacts "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/windows-x64/msi/*.msi
             artifacts/windows-x64/nsis/*-setup.exe
+            artifacts/windows-x64/nsis/*-setup.exe.sig
             artifacts/windows-arm64/msi/*.msi
             artifacts/windows-arm64/nsis/*-setup.exe
+            artifacts/windows-arm64/nsis/*-setup.exe.sig
             artifacts/linux-x64/deb/*.deb
             artifacts/linux-x64/rpm/*.rpm
             artifacts/linux-x64/appimage/*.AppImage
-            artifacts/macos-arm64/*.dmg
-            artifacts/macos-x64/*.dmg
+            artifacts/linux-x64/appimage/*.AppImage.sig
+            artifacts/macos-arm64/dmg/*.dmg
+            artifacts/macos-arm64/macos/*.app.tar.gz
+            artifacts/macos-arm64/macos/*.app.tar.gz.sig
+            artifacts/macos-x64/dmg/*.dmg
+            artifacts/macos-x64/macos/*.app.tar.gz
+            artifacts/macos-x64/macos/*.app.tar.gz.sig
+            artifacts/latest.json
           name: Release ${{ github.ref_name }}
           body: |
             ### Release ${{ github.ref_name }}

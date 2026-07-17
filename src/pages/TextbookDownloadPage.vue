@@ -9,12 +9,13 @@ import { ElSelect, ElOption, ElMessage } from 'element-plus';
 import { Search, Download } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
 import TextbookItem from '@/components/TextbookItem.vue';
+import { enqueueDownload } from '@/composables/useDownloadManager';
 import { useCategories } from '@/composables/useCategories';
 import { useTextbookFilters } from '@/composables/useTextbookFilters';
 import { readDownloadSettings } from '@/utils/settings';
 import type { Textbook, TextbookLabels } from '@/types';
 
-const { categories, load: loadCategories } = useCategories();
+const { categories, loading: categoriesLoading, load: loadCategories } = useCategories();
 
 // 分类作为页面内第一级筛选（本地状态，配合 keep-alive 切换页面后保留）
 const categoryId = ref('');
@@ -86,6 +87,7 @@ const handleSearch = async () => {
   }
 };
 
+// 批量下载 = 全部入队，由全局下载池按设置的并发数调度
 const handleBatchDownload = () => {
   const settings = readDownloadSettings();
   if (!settings.downloadPath) {
@@ -94,26 +96,33 @@ const handleBatchDownload = () => {
   }
 
   const labels = selectedLabels.value;
-  const textbooksToDownload = textbooks.value.map((textbook) => ({
-    url: textbook.download_url,
-    title: textbook.title,
-    category_label: labels.category,
-    subject_label: labels.subject,
-    version_label: labels.version,
-    grade_label: labels.grade,
-    year_label: labels.year,
-    save_by_category: settings.saveByCategory,
-  }));
+  const subtitle = [labels.category, labels.subject, labels.version].filter(Boolean).join(' / ');
+  let queued = 0;
+  for (const textbook of textbooks.value) {
+    const ok = enqueueDownload({
+      url: textbook.download_url,
+      kind: 'textbook',
+      title: textbook.title,
+      subtitle,
+      payload: {
+        url: textbook.download_url,
+        title: textbook.title,
+        category_label: labels.category,
+        subject_label: labels.subject,
+        version_label: labels.version,
+        grade_label: labels.grade,
+        year_label: labels.year,
+        save_by_category: settings.saveByCategory,
+      },
+    });
+    if (ok) queued += 1;
+  }
 
-  invoke('batch_download_textbooks', {
-    textbooksToDownload,
-    token: settings.token,
-    downloadPath: settings.downloadPath,
-    threadCount: settings.threadCount,
-  }).catch((error) => {
-    console.error('批量下载启动失败:', error);
-    ElMessage.error('下载错误' + error);
-  });
+  if (queued > 0) {
+    ElMessage.success(`已将 ${queued} 本教材加入下载队列`);
+  } else {
+    ElMessage.info('所选教材都已在下载队列中');
+  }
 };
 
 onMounted(() => {
@@ -136,7 +145,9 @@ onMounted(() => {
   <div class="page-shell" v-loading="isLoading">
     <div class="toolbar">
       <div class="filters">
-        <el-select v-model="categoryId" class="filter-select" placeholder="选择分类">
+        <el-select v-model="categoryId" class="filter-select"
+          :placeholder="categoriesLoading ? '分类加载中…' : '选择分类'"
+          :loading="categoriesLoading" loading-text="分类加载中…">
           <el-option v-for="item in categories" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
 

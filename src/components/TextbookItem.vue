@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { ElButton, ElProgress, ElMessage } from 'element-plus';
-import { Download, Picture, Check, Close, StarFilled, View, Loading, Refresh, FolderOpened, Document } from '@element-plus/icons-vue';
+import { Download, Picture, Check, Close, StarFilled, View, Loading, Refresh, FolderOpened, Document, VideoPause } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
-import { useDownload } from '@/composables/useDownloadManager';
+import { enqueueDownload, pauseDownload, resumeDownload, useDownload } from '@/composables/useDownloadManager';
 import { useCoverImage } from '@/composables/useCoverImage';
 import { formatCount } from '@/utils/format';
 import { readDownloadSettings } from '@/utils/settings';
@@ -14,7 +14,7 @@ const props = defineProps<{
   labels: TextbookLabels;
 }>();
 
-// 所有条目共享一个下载状态仓库与一对事件监听（见 useDownloadManager）
+// 所有条目共享一个下载任务池与一对事件监听（见 useDownloadManager）
 const download = useDownload(props.textbook.download_url);
 const { src: coverSrc, loading: coverLoading, failed: coverFailed } = useCoverImage(
   props.textbook.id,
@@ -34,20 +34,22 @@ watch(
   }
 );
 
+// 入队新任务（idle/completed 状态时）；排队与调度由全局下载池负责
 const handleDownload = () => {
   const settings = readDownloadSettings();
   if (!settings.downloadPath) {
-    download.status = 'failed';
-    download.error = '下载路径未设置';
+    ElMessage.warning('下载路径未设置，请前往设置页面配置');
     return;
   }
 
-  download.status = 'downloading';
-  download.progress = 0;
-  download.error = '';
-
-  invoke('download_textbook', {
-    textbookInfo: {
+  const queued = enqueueDownload({
+    url: props.textbook.download_url,
+    kind: 'textbook',
+    title: props.textbook.title,
+    subtitle: [props.labels.category, props.labels.subject, props.labels.version]
+      .filter(Boolean)
+      .join(' / '),
+    payload: {
       url: props.textbook.download_url,
       title: props.textbook.title,
       category_label: props.labels.category,
@@ -57,25 +59,38 @@ const handleDownload = () => {
       year_label: props.labels.year,
       save_by_category: settings.saveByCategory,
     },
-    token: settings.token,
-    downloadPath: settings.downloadPath,
-  }).catch((error) => {
-    console.error('下载失败:', error);
   });
+  if (!queued) {
+    ElMessage.info('该教材已在下载队列中');
+  }
 };
 
-const handleCancel = () => {
-  invoke('cancel_download', { url: props.textbook.download_url })
-    .then(() => {
-      download.status = 'idle';
-      download.progress = 0;
-      download.error = '';
-    })
-    .catch((error) => {
-      console.error('取消下载失败:', error);
-      download.error = '取消下载失败';
-    });
+// 主按钮：暂停/中断/失败走继续（续传），其余重新入队
+const handlePrimaryAction = () => {
+  if (download.status === 'paused' || download.status === 'interrupted' || download.status === 'failed') {
+    resumeDownload(props.textbook.download_url);
+    return;
+  }
+  handleDownload();
 };
+
+const handlePause = () => {
+  pauseDownload(props.textbook.download_url);
+};
+
+const isActive = computed(() => download.status === 'downloading' || download.status === 'queued');
+
+const primaryButtonText = computed(() => {
+  switch (download.status) {
+    case 'downloading': return '下载中...';
+    case 'queued': return '排队中';
+    case 'paused': return '继续下载';
+    case 'interrupted': return '继续下载';
+    case 'completed': return '重新下载';
+    case 'failed': return '重试下载';
+    default: return '下载';
+  }
+});
 
 // 打开已下载的文件（用系统默认程序，如 PDF 阅读器）
 const openFile = () => {
@@ -157,6 +172,21 @@ const totalUvText = computed(() => formatCount(props.textbook.total_uv));
         </div>
       </div>
 
+      <div v-else-if="download.status === 'queued'" class="progress-block">
+        <el-progress :percentage="download.progress" :stroke-width="8" :show-text="false" status="warning" />
+        <div class="progress-meta">
+          <span>已加入下载队列，等待空闲线程…</span>
+        </div>
+      </div>
+
+      <div v-else-if="download.status === 'paused' || download.status === 'interrupted'" class="progress-block">
+        <el-progress :percentage="download.progress" :stroke-width="8" :show-text="false" status="warning" />
+        <div class="progress-meta">
+          <span>{{ download.status === 'paused' ? '已暂停，可继续下载' : '上次未完成，可继续下载' }}</span>
+          <span class="progress-percent">{{ download.progress }}%</span>
+        </div>
+      </div>
+
       <div v-else-if="download.status === 'completed'" class="status-line status-success">
         <el-icon :size="14">
           <Check />
@@ -172,22 +202,21 @@ const totalUvText = computed(() => formatCount(props.textbook.total_uv));
       </div>
 
       <div class="actions">
-        <el-button @click="handleDownload" size="small"
+        <el-button @click="handlePrimaryAction" size="small"
           :type="download.status === 'completed' ? 'success' : 'primary'"
-          :disabled="download.status === 'downloading'"
+          :disabled="isActive"
           :loading="download.status === 'downloading'">
           <el-icon class="mr-1" v-if="download.status !== 'downloading'">
             <Refresh v-if="download.status === 'completed'" />
             <Download v-else />
           </el-icon>
-          {{
-            download.status === 'downloading' ? '下载中...' :
-              download.status === 'completed' ? '重新下载' :
-                download.status === 'failed' ? '重试下载' : '下载'
-          }}
+          {{ primaryButtonText }}
         </el-button>
-        <el-button v-if="download.status === 'downloading'" @click="handleCancel" size="small" type="danger" plain>
-          取消
+        <el-button v-if="isActive" @click="handlePause" size="small" type="warning" plain>
+          <el-icon class="mr-1">
+            <VideoPause />
+          </el-icon>
+          暂停
         </el-button>
         <el-button v-if="download.status === 'completed'" @click="openFile" size="small" type="primary" plain>
           <el-icon class="mr-1">

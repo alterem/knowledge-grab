@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { ref, onUnmounted, onMounted, provide } from 'vue';
-import { ElContainer, ElHeader, ElAside, ElMain, ElMessage, ElMessageBox } from 'element-plus';
+import { ElContainer, ElHeader, ElAside, ElMain, ElMessage } from 'element-plus';
 import { Sunny, Moon, QuestionFilled, Setting } from '@element-plus/icons-vue';
 import Sidebar from './components/Sidebar.vue';
+import DownloadMiniBar from './components/DownloadMiniBar.vue';
 import { useRouter } from 'vue-router';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { STORAGE_KEYS } from '@/utils/settings';
+import { checkForUpdates, isAutoCheckEnabled } from '@/composables/useUpdater';
+import { initDownloadManager } from '@/composables/useDownloadManager';
 
 const router = useRouter();
 
@@ -70,10 +73,6 @@ provide('toggleTheme', toggleTheme);
 
 // 登录窗口捕获的令牌在应用层持久化，避免用户离开设置页后丢失
 let unlistenTokenCaptured: UnlistenFn | null = null;
-// 批量下载完成/失败提示收敛到全局唯一一处：两个下载页都被 keep-alive 缓存，
-// 若各自监听会导致提示弹出多次
-let unlistenBatchCompleted: UnlistenFn | null = null;
-let unlistenBatchFailed: UnlistenFn | null = null;
 
 onMounted(async () => {
   isDarkMode.value = localStorage.getItem(STORAGE_KEYS.theme) === 'dark';
@@ -81,6 +80,10 @@ onMounted(async () => {
 
   document.addEventListener('contextmenu', handleRightClick);
   window.addEventListener('keydown', handleKeydown);
+
+  // 尽早初始化下载池：载入历史记录（含上次中断任务）并注册事件监听，
+  // 汇总提示（全部完成/部分失败）也由池统一处理
+  void initDownloadManager();
 
   unlistenTokenCaptured = await listen<{ token: string; mac_key?: string }>(
     'access-token-captured',
@@ -94,30 +97,12 @@ onMounted(async () => {
     }
   );
 
-  unlistenBatchCompleted = await listen<{ downloadPath: string }>(
-    'batch-download-completed',
-    (event) => {
-      const downloadPath = event.payload.downloadPath;
-      ElMessage.success('批量下载完成！');
-      ElMessageBox.confirm('下载已完成，是否打开下载文件夹？', '下载完成', {
-        confirmButtonText: '打开文件夹',
-        cancelButtonText: '关闭',
-        type: 'success',
-      })
-        .then(() => {
-          invoke('open_download_folder_prompt', { downloadPath }).catch((err) =>
-            console.error('打开下载文件夹失败:', err)
-          );
-        })
-        .catch(() => {
-          /* 用户选择不打开 */
-        });
-    }
-  );
-
-  unlistenBatchFailed = await listen('batch-download-failed', () => {
-    ElMessage.error('部分文件下载失败，请检查网络连接后重试。');
-  });
+  // 启动后延迟静默检查更新，避开首屏加载；无更新/失败都不打扰用户
+  if (isAutoCheckEnabled()) {
+    window.setTimeout(() => {
+      void checkForUpdates({ silent: true });
+    }, 5000);
+  }
 });
 
 const handleRightClick = (event: MouseEvent) => {
@@ -140,10 +125,6 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
   unlistenTokenCaptured?.();
   unlistenTokenCaptured = null;
-  unlistenBatchCompleted?.();
-  unlistenBatchCompleted = null;
-  unlistenBatchFailed?.();
-  unlistenBatchFailed = null;
 });
 
 </script>
@@ -201,12 +182,13 @@ onUnmounted(() => {
         <div class="resize-handle" :class="{ 'is-resizing': isResizing }" @mousedown="startDragging"></div>
 
         <el-main class="app-main">
-          <!-- 只缓存两个下载页，保留搜索结果/解析列表等状态；设置/帮助每次重新加载 -->
+          <!-- 缓存两个下载页与下载管理页，保留搜索结果/解析列表/筛选状态；设置/帮助每次重新加载 -->
           <router-view v-slot="{ Component }">
-            <keep-alive :include="['TextbookDownloadPage', 'CourseDownloadPage']">
+            <keep-alive :include="['TextbookDownloadPage', 'CourseDownloadPage', 'DownloadManagerPage']">
               <component :is="Component" />
             </keep-alive>
           </router-view>
+          <DownloadMiniBar />
         </el-main>
       </el-container>
 

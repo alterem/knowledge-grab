@@ -8,6 +8,8 @@ export const STORAGE_KEYS = {
   saveByCategory: 'save_by_category',
   ffmpegPath: 'ffmpeg_path',
   theme: 'theme',
+  // 启动时自动检查更新（缺省视为开启，存 'false' 表示关闭）
+  autoCheckUpdate: 'auto_check_update',
 } as const;
 
 export interface DownloadSettings {

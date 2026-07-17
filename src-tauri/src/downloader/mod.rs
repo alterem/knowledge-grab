@@ -3,16 +3,14 @@ mod task;
 
 use crate::models::TextbookDownloadInfo;
 use once_cell::sync::Lazy;
-use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tauri::Emitter;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::fs;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use task::{DownloadEventEmitter, DownloadStatus};
 
-// 进行中的下载，以 URL 为键，用于取消
+// 进行中的下载，以 URL 为键，用于取消/暂停（半成品保留，语义由前端决定）
 static DOWNLOAD_TOKENS: Lazy<Mutex<HashMap<String, CancellationToken>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -24,16 +22,19 @@ async fn cleanup_download_token(url: &str) {
     DOWNLOAD_TOKENS.lock().await.remove(url);
 }
 
-fn setup_cancellation_cleanup(
-    url: String,
-    cancellation_token: CancellationToken,
+// 任务结束后的统一收尾：清理令牌；若因取消而结束，补发 cancelled 事件
+// （在任务真正停下后才发，前端可安全地立即续传/清理半成品）
+async fn finish_download(
+    url: &str,
     app_handle: tauri::AppHandle,
+    cancellation_token: &CancellationToken,
+    result: &Result<String, String>,
 ) {
-    tokio::spawn(async move {
-        cancellation_token.cancelled().await;
-        cleanup_download_token(&url).await;
-        DownloadEventEmitter::new(app_handle, url).emit_status(DownloadStatus::Cancelled, 0);
-    });
+    cleanup_download_token(url).await;
+    if result.is_err() && cancellation_token.is_cancelled() {
+        DownloadEventEmitter::new(app_handle, url.to_string())
+            .emit_status(DownloadStatus::Cancelled, 0);
+    }
 }
 
 #[tauri::command]
@@ -47,110 +48,18 @@ pub async fn download_textbook(
     let url = textbook_info.url.clone();
 
     register_download_token(&url, cancellation_token.clone()).await;
-    setup_cancellation_cleanup(url.clone(), cancellation_token.clone(), app_handle.clone());
 
     let result = task::run(
-        app_handle,
+        app_handle.clone(),
         textbook_info,
         token,
         download_path,
-        cancellation_token,
+        cancellation_token.clone(),
     )
     .await;
 
-    cleanup_download_token(&url).await;
+    finish_download(&url, app_handle, &cancellation_token, &result).await;
     result
-}
-
-#[tauri::command]
-pub async fn cancel_download(url: String) -> Result<(), String> {
-    if let Some(token) = DOWNLOAD_TOKENS.lock().await.remove(&url) {
-        token.cancel();
-        log::info!("已发送取消信号: {url}");
-        Ok(())
-    } else {
-        Err(format!("没有进行中的下载: {url}"))
-    }
-}
-
-#[tauri::command]
-pub async fn batch_download_textbooks(
-    app_handle: tauri::AppHandle,
-    textbooks_to_download: Vec<TextbookDownloadInfo>,
-    token: Option<String>,
-    download_path: String,
-    thread_count: usize,
-) -> Result<(), String> {
-    log::info!(
-        "批量下载 {} 个文件，并发 {}，目录: {download_path}",
-        textbooks_to_download.len(),
-        thread_count
-    );
-
-    if textbooks_to_download.is_empty() {
-        return Err("没有可下载的教材".to_string());
-    }
-    if download_path.is_empty() {
-        return Err("未设置下载路径".to_string());
-    }
-    if thread_count == 0 {
-        return Err("并发数必须大于 0".to_string());
-    }
-
-    let semaphore = Arc::new(Semaphore::new(thread_count));
-    let mut join_handles = Vec::with_capacity(textbooks_to_download.len());
-
-    for textbook in textbooks_to_download {
-        let app_handle = app_handle.clone();
-        let token = token.clone();
-        let download_path = download_path.clone();
-        let url = textbook.url.clone();
-        let semaphore = Arc::clone(&semaphore);
-        let cancellation_token = CancellationToken::new();
-
-        register_download_token(&url, cancellation_token.clone()).await;
-        setup_cancellation_cleanup(url.clone(), cancellation_token.clone(), app_handle.clone());
-
-        join_handles.push(tokio::spawn(async move {
-            let _permit = semaphore.acquire().await.expect("信号量已关闭");
-
-            let result = if cancellation_token.is_cancelled() {
-                Err("下载已取消".to_string())
-            } else {
-                task::run(
-                    app_handle,
-                    textbook,
-                    token,
-                    download_path,
-                    cancellation_token,
-                )
-                .await
-            };
-
-            cleanup_download_token(&url).await;
-            result
-        }));
-    }
-
-    let mut all_succeeded = true;
-    for handle in join_handles {
-        match handle.await {
-            Ok(result) => all_succeeded &= result.is_ok(),
-            Err(e) => {
-                log::error!("下载任务异常: {e}");
-                all_succeeded = false;
-            }
-        }
-    }
-
-    let event = if all_succeeded {
-        "batch-download-completed"
-    } else {
-        "batch-download-failed"
-    };
-    let _ = app_handle.emit(event, json!({ "downloadPath": download_path }));
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -165,93 +74,56 @@ pub async fn download_course_resource(
     let url = resource.download_url.clone();
 
     register_download_token(&url, cancellation_token.clone()).await;
-    setup_cancellation_cleanup(url.clone(), cancellation_token.clone(), app_handle.clone());
 
     let result = task::run_course(
-        app_handle,
+        app_handle.clone(),
         resource,
         token,
         download_path,
         ffmpeg_path,
-        cancellation_token,
+        cancellation_token.clone(),
     )
     .await;
 
-    cleanup_download_token(&url).await;
+    finish_download(&url, app_handle, &cancellation_token, &result).await;
     result
 }
 
+/// 停止进行中的下载。半成品（.part / .parts）一律保留：
+/// 前端「暂停」直接复用本命令，「重新下载/删除」再调 remove_download_artifacts 清理。
 #[tauri::command]
-pub async fn batch_download_course_resources(
-    app_handle: tauri::AppHandle,
-    resources: Vec<crate::models::CourseDownloadInfo>,
-    token: Option<String>,
-    download_path: String,
-    ffmpeg_path: Option<String>,
-    thread_count: usize,
-) -> Result<(), String> {
-    if resources.is_empty() {
-        return Err("没有可下载的资源".to_string());
-    }
-    if download_path.is_empty() {
-        return Err("未设置下载路径".to_string());
-    }
-    let thread_count = thread_count.max(1);
-
-    let semaphore = Arc::new(Semaphore::new(thread_count));
-    let mut join_handles = Vec::with_capacity(resources.len());
-
-    for resource in resources {
-        let app_handle = app_handle.clone();
-        let token = token.clone();
-        let download_path = download_path.clone();
-        let ffmpeg_path = ffmpeg_path.clone();
-        let url = resource.download_url.clone();
-        let semaphore = Arc::clone(&semaphore);
-        let cancellation_token = CancellationToken::new();
-
-        register_download_token(&url, cancellation_token.clone()).await;
-        setup_cancellation_cleanup(url.clone(), cancellation_token.clone(), app_handle.clone());
-
-        join_handles.push(tokio::spawn(async move {
-            let _permit = semaphore.acquire().await.expect("信号量已关闭");
-
-            let result = if cancellation_token.is_cancelled() {
-                Err("下载已取消".to_string())
-            } else {
-                task::run_course(
-                    app_handle,
-                    resource,
-                    token,
-                    download_path,
-                    ffmpeg_path,
-                    cancellation_token,
-                )
-                .await
-            };
-
-            cleanup_download_token(&url).await;
-            result
-        }));
-    }
-
-    let mut all_succeeded = true;
-    for handle in join_handles {
-        match handle.await {
-            Ok(result) => all_succeeded &= result.is_ok(),
-            Err(e) => {
-                log::error!("下载任务异常: {e}");
-                all_succeeded = false;
-            }
-        }
-    }
-
-    let event = if all_succeeded {
-        "batch-download-completed"
+pub async fn cancel_download(url: String) -> Result<(), String> {
+    if let Some(token) = DOWNLOAD_TOKENS.lock().await.remove(&url) {
+        token.cancel();
+        log::info!("已发送取消信号: {url}");
+        Ok(())
     } else {
-        "batch-download-failed"
-    };
-    let _ = app_handle.emit(event, json!({ "downloadPath": download_path }));
+        Err(format!("没有进行中的下载: {url}"))
+    }
+}
+
+/// 清理某任务的半成品（<final>.part 文件与 <final>.parts 切片目录），不动最终文件。
+/// file_path 为任务开始时事件上报的目标路径。
+#[tauri::command]
+pub async fn remove_download_artifacts(file_path: String) -> Result<(), String> {
+    if file_path.is_empty() {
+        return Ok(());
+    }
+    let final_path = std::path::PathBuf::from(&file_path);
+
+    let part = task::path_with_suffix(&final_path, ".part");
+    if fs::try_exists(&part).await.unwrap_or(false) {
+        fs::remove_file(&part)
+            .await
+            .map_err(|e| format!("删除半成品失败: {e}"))?;
+    }
+
+    let parts_dir = task::path_with_suffix(&final_path, ".parts");
+    if fs::try_exists(&parts_dir).await.unwrap_or(false) {
+        fs::remove_dir_all(&parts_dir)
+            .await
+            .map_err(|e| format!("删除切片缓存失败: {e}"))?;
+    }
 
     Ok(())
 }

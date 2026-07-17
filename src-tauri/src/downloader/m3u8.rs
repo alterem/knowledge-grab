@@ -8,6 +8,9 @@
 // 切片再用 AES-128-CBC(key, iv) + PKCS7 解密。全流程已离线验证。
 //
 // m3u8 与 ts 均需携带占位 MAC 鉴权头（见 task::create_request）。
+//
+// 断点续传：解密后的切片逐个落盘到 <最终名>.parts/ 目录，中断后重试会跳过
+// 已存在的切片（密钥每次重新握手获取，不落盘）；全部就绪后按序流式拼接。
 
 use crate::http::CLIENT;
 use aes::Aes128;
@@ -18,17 +21,18 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::fs;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use super::task::{DownloadEventEmitter, USER_AGENT};
+use super::task::{DownloadEventEmitter, USER_AGENT, path_with_suffix};
 
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 type Aes128EcbDec = ecb::Decryptor<Aes128>;
 
-// 切片并发下载数：偏大以吃满带宽，但受全局并发（批量下载信号量）约束
+// 切片并发下载数：偏大以吃满带宽，但受全局并发（前端下载池调度）约束
 const SEGMENT_CONCURRENCY: usize = 8;
 
 struct KeyInfo {
@@ -187,8 +191,67 @@ fn decrypt_segment(data: &[u8], key: &KeyInfo) -> Result<Vec<u8>, String> {
     Ok(dec.to_vec())
 }
 
+fn segment_file_name(idx: usize) -> String {
+    format!("seg_{idx:05}.ts")
+}
+
+// 建立/校验切片缓存目录。playlist 变化（地址或切片数不同）时清空重建，避免错位拼接
+async fn prepare_parts_dir(parts_dir: &Path, m3u8_url: &str, total: usize) -> Result<(), String> {
+    let manifest_path = parts_dir.join("manifest.txt");
+    let manifest = format!("{m3u8_url}\n{total}");
+
+    if fs::try_exists(parts_dir).await.unwrap_or(false) {
+        let stale = match fs::read_to_string(&manifest_path).await {
+            Ok(prev) => prev != manifest,
+            Err(_) => true,
+        };
+        if stale {
+            fs::remove_dir_all(parts_dir)
+                .await
+                .map_err(|e| format!("清理切片缓存失败: {e}"))?;
+        }
+    }
+
+    fs::create_dir_all(parts_dir)
+        .await
+        .map_err(|e| format!("创建切片缓存目录失败: {e}"))?;
+    fs::write(&manifest_path, manifest)
+        .await
+        .map_err(|e| format!("写入切片清单失败: {e}"))?;
+    Ok(())
+}
+
+// 依序把切片拼接为单个 .ts（逐片读写，峰值内存只有单个切片大小）
+async fn assemble_ts(
+    ts_path: &Path,
+    parts_dir: &Path,
+    total: usize,
+    cancellation_token: &CancellationToken,
+) -> Result<(), String> {
+    let file = fs::File::create(ts_path)
+        .await
+        .map_err(|e| format!("创建文件失败: {e}"))?;
+    let mut writer = BufWriter::new(file);
+    for idx in 0..total {
+        if cancellation_token.is_cancelled() {
+            return Err("下载已取消".to_string());
+        }
+        let seg_path = parts_dir.join(segment_file_name(idx));
+        let bytes = fs::read(&seg_path)
+            .await
+            .map_err(|e| format!("切片 {idx} 缺失: {e}"))?;
+        writer
+            .write_all(&bytes)
+            .await
+            .map_err(|e| format!("写入失败: {e}"))?;
+    }
+    writer.flush().await.map_err(|e| format!("写入失败: {e}"))?;
+    Ok(())
+}
+
 /// 下载并解密整个 m3u8 视频。返回实际写入的文件路径：
 /// ffmpeg 可用则转封装成 out_path（通常 .mp4），否则保留裸拼的 .ts。
+/// 中断/取消会保留 <out_path>.parts/ 中已下载的切片，下次调用自动续传。
 pub(super) async fn download(
     m3u8_url: &str,
     token: Option<&str>,
@@ -207,43 +270,62 @@ pub(super) async fn download(
         return Err("播放列表为空".to_string());
     }
 
-    // 2. 取密钥（如加密）
+    // 2. 取密钥（如加密）。续传时也重新握手，密钥不落盘
     let key_info = match playlist.key_url.as_deref() {
         Some(ku) => Some(Arc::new(fetch_key(ku, playlist.iv_hex.as_deref(), token).await?)),
         None => None,
     };
 
     let total = playlist.segments.len();
-    emitter.emit_progress(0);
 
-    // 3. 并发下载 + 解密所有切片，保序收集
-    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let indexed: Vec<(usize, String)> = playlist
-        .segments
-        .iter()
-        .cloned()
-        .enumerate()
-        .collect();
-    let results: Vec<Result<(usize, Vec<u8>), String>> = stream::iter(
-        indexed.into_iter().map(|(idx, seg_url)| {
+    // 3. 切片缓存目录：<最终名>.parts/
+    let parts_dir = path_with_suffix(out_path, ".parts");
+    prepare_parts_dir(&parts_dir, m3u8_url, total).await?;
+
+    emitter.emit_progress(0, 0, None);
+
+    // 4. 并发下载 + 解密切片，逐片落盘；已存在的切片直接跳过（续传）
+    let done_count = Arc::new(AtomicUsize::new(0));
+    let done_bytes = Arc::new(AtomicU64::new(0));
+    let results: Vec<Result<(), String>> = stream::iter(
+        playlist.segments.iter().cloned().enumerate().map(|(idx, seg_url)| {
             let key_info = key_info.clone();
-            let counter = Arc::clone(&counter);
+            let done_count = Arc::clone(&done_count);
+            let done_bytes = Arc::clone(&done_bytes);
             let token = token.map(str::to_string);
+            let seg_path = parts_dir.join(segment_file_name(idx));
+            let tmp_path = parts_dir.join(format!("{}.tmp", segment_file_name(idx)));
             async move {
                 if cancellation_token.is_cancelled() {
                     return Err("下载已取消".to_string());
                 }
-                let raw = get_bytes_authed(&seg_url, token.as_deref())
-                    .await
-                    .map_err(|e| format!("切片 {idx} 下载失败: {e}"))?;
-                let bytes = match &key_info {
-                    Some(k) => decrypt_segment(&raw, k)?,
-                    None => raw,
+
+                let seg_len = match fs::metadata(&seg_path).await {
+                    // 已有完整切片（写入走 tmp+rename，存在即完整），跳过下载
+                    Ok(meta) if meta.len() > 0 => meta.len(),
+                    _ => {
+                        let raw = get_bytes_authed(&seg_url, token.as_deref())
+                            .await
+                            .map_err(|e| format!("切片 {idx} 下载失败: {e}"))?;
+                        let bytes = match &key_info {
+                            Some(k) => decrypt_segment(&raw, k)?,
+                            None => raw,
+                        };
+                        fs::write(&tmp_path, &bytes)
+                            .await
+                            .map_err(|e| format!("写入切片失败: {e}"))?;
+                        fs::rename(&tmp_path, &seg_path)
+                            .await
+                            .map_err(|e| format!("写入切片失败: {e}"))?;
+                        bytes.len() as u64
+                    }
                 };
-                // 进度按已完成切片数上报
-                let done = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                emitter.emit_progress((done as f64 / total as f64 * 100.0) as u32);
-                Ok((idx, bytes))
+
+                // 进度按已就绪切片数上报，字节数供前端算速度
+                let done = done_count.fetch_add(1, Ordering::SeqCst) + 1;
+                let bytes_sum = done_bytes.fetch_add(seg_len, Ordering::SeqCst) + seg_len;
+                emitter.emit_progress((done as f64 / total as f64 * 100.0) as u32, bytes_sum, None);
+                Ok(())
             }
         }),
     )
@@ -254,17 +336,13 @@ pub(super) async fn download(
     if cancellation_token.is_cancelled() {
         return Err("下载已取消".to_string());
     }
-
-    // 保序：按 idx 排列
-    let mut segments: Vec<Option<Vec<u8>>> = (0..total).map(|_| None).collect();
     for r in results {
-        let (idx, bytes) = r?;
-        segments[idx] = Some(bytes);
+        r?;
     }
 
-    // 4. 合成
+    // 5. 按序拼接切片 → .ts
     let ts_path = out_path.with_extension("ts");
-    write_ts(&ts_path, &segments).await?;
+    assemble_ts(&ts_path, &parts_dir, total, cancellation_token).await?;
 
     // ffmpeg 可用则 remux 成目标容器（通常 .mp4），失败或缺失则保留 .ts
     if let Some(ff) = ffmpeg_path.filter(|p| !p.is_empty()) {
@@ -272,6 +350,7 @@ pub(super) async fn download(
             match remux(ff, &ts_path, out_path).await {
                 Ok(()) => {
                     let _ = fs::remove_file(&ts_path).await;
+                    let _ = fs::remove_dir_all(&parts_dir).await;
                     return Ok(out_path.to_path_buf());
                 }
                 Err(e) => {
@@ -281,24 +360,8 @@ pub(super) async fn download(
         }
     }
 
+    let _ = fs::remove_dir_all(&parts_dir).await;
     Ok(ts_path)
-}
-
-// 按序把所有切片写入单个 .ts 文件
-async fn write_ts(path: &Path, segments: &[Option<Vec<u8>>]) -> Result<(), String> {
-    let file = fs::File::create(path)
-        .await
-        .map_err(|e| format!("创建文件失败: {e}"))?;
-    let mut writer = BufWriter::new(file);
-    for (i, seg) in segments.iter().enumerate() {
-        let bytes = seg.as_ref().ok_or_else(|| format!("切片 {i} 缺失"))?;
-        writer
-            .write_all(bytes)
-            .await
-            .map_err(|e| format!("写入失败: {e}"))?;
-    }
-    writer.flush().await.map_err(|e| format!("写入失败: {e}"))?;
-    Ok(())
 }
 
 // 调 ffmpeg 把 .ts 无损转封装成目标容器（-c copy，不重新编码）

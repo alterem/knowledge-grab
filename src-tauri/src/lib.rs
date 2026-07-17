@@ -15,6 +15,11 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     {
         use tauri::Manager;
 
+        // updater / process 仅桌面端可用，在 setup 中按平台注册
+        app.handle()
+            .plugin(tauri_plugin_updater::Builder::new().build())?;
+        app.handle().plugin(tauri_plugin_process::init())?;
+
         let window = app.get_webview_window("main").ok_or("无法获取主窗口")?;
         window.set_min_size(Some(tauri::LogicalSize::new(
             MIN_WINDOW_WIDTH,
@@ -49,10 +54,9 @@ pub fn run() {
         .on_menu_event(|_window, event| handle_menu_event(event.id.as_ref()))
         .invoke_handler(tauri::generate_handler![
             downloader::download_textbook,
-            downloader::batch_download_textbooks,
             downloader::cancel_download,
             downloader::download_course_resource,
-            downloader::batch_download_course_resources,
+            downloader::remove_download_artifacts,
             downloader::check_ffmpeg,
             api::fetch_textbooks,
             api::fetch_filter_options,

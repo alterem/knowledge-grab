@@ -1,6 +1,7 @@
 use std::path::Path;
 
-const APP_VERSION: &str = "1.0.0";
+// 版本号取自 Cargo.toml（CI 会校验其与发布 tag 一致），避免再出现硬编码漂移
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APP_NAME: &str = "教科书下载器";
 const COPYRIGHT: &str = "© 2025 版权所有";
 const APP_DESCRIPTION: &str = "一个用于下载教科书的应用。";

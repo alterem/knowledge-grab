@@ -28,3 +28,6 @@ dist-ssr
 *.sln
 *.sw?
 .pnpm-store
+
+# Tauri updater 签名密钥（私钥绝不入库；公钥已写入 tauri.conf.json）
+.updater-key/

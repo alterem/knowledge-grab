@@ -1,7 +1,6 @@
 use crate::api::books;
 use crate::http::CLIENT;
 use crate::models::TextbookDownloadInfo;
-use bytes::Bytes;
 use futures_util::StreamExt;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -56,12 +55,28 @@ impl DownloadEventEmitter {
         let _ = self.app_handle.emit("download-status", event_data);
     }
 
-    pub(super) fn emit_progress(&self, progress: u32) {
+    // 进度附带字节数，前端据此计算速度；总大小未知时（m3u8 按切片计数）为 null
+    pub(super) fn emit_progress(&self, progress: u32, downloaded_bytes: u64, total_bytes: Option<u64>) {
         let _ = self.app_handle.emit(
             "download-progress",
             json!({
                 "url": self.url,
                 "progress": progress,
+                "downloadedBytes": downloaded_bytes,
+                "totalBytes": total_bytes,
+            }),
+        );
+    }
+
+    // 任务开始时先把目标路径告知前端：中断后续传、清理半成品都以它为锚点
+    pub(super) fn emit_target_path(&self, file_path: &Path) {
+        let _ = self.app_handle.emit(
+            "download-status",
+            json!({
+                "url": self.url,
+                "status": "downloading",
+                "progress": 0,
+                "filePath": file_path.to_string_lossy(),
             }),
         );
     }
@@ -77,6 +92,13 @@ impl DownloadEventEmitter {
             }),
         );
     }
+}
+
+// 在文件名末尾追加后缀（"a/b.mp4" + ".parts" → "a/b.mp4.parts"），半成品统一命名
+pub(super) fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(suffix);
+    path.with_file_name(name)
 }
 
 fn extract_file_extension(url: &Url) -> String {
@@ -131,48 +153,120 @@ fn calculate_progress(downloaded: u64, total: Option<u64>) -> u32 {
     }
 }
 
-async fn process_download_stream(
-    mut stream: impl futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
-    file_path: &Path,
+fn map_http_error(status: reqwest::StatusCode) -> String {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        "下载失败：需要有效的 Access Token（请在「设置」中填写，或令牌可能已过期）".to_string()
+    } else {
+        format!("下载失败: HTTP {status}")
+    }
+}
+
+struct ResumableResponse {
+    response: reqwest::Response,
+    // 实际续传起点：服务器返回 206 时为 .part 现有长度，否则 0（从头写）
+    resume_from: u64,
+    // 最终文件总大小（续传时 = 剩余长度 + 起点）
     total_size: Option<u64>,
+}
+
+// 发起下载请求；part_path 已有半成品时带 Range 续传。
+// 服务器忽略 Range（200）则从头下载；416（起点越界，远端文件已变或早已下完）
+// 时丢弃半成品重发一次完整请求。
+async fn open_resumable(
+    url: &Url,
+    token: Option<&str>,
+    part_path: &Path,
+) -> Result<ResumableResponse, String> {
+    let mut resume_from = fs::metadata(part_path).await.map(|m| m.len()).unwrap_or(0);
+
+    loop {
+        let mut request = create_request(url, token);
+        if resume_from > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+        }
+        let response = request.send().await.map_err(|e| format!("下载失败: {e}"))?;
+        let status = response.status();
+
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE && resume_from > 0 {
+            log::warn!("Range 起点越界，丢弃半成品重新下载: {}", part_path.display());
+            let _ = fs::remove_file(part_path).await;
+            resume_from = 0;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(map_http_error(status));
+        }
+
+        if status != reqwest::StatusCode::PARTIAL_CONTENT {
+            resume_from = 0;
+        } else {
+            log::info!("从 {resume_from} 字节处续传: {url}");
+        }
+        let total_size = response.content_length().map(|len| len + resume_from);
+        return Ok(ResumableResponse {
+            response,
+            resume_from,
+            total_size,
+        });
+    }
+}
+
+// 把响应流写入 .part 文件（续传时追加）。取消/出错都保留 .part 供下次续传；
+// 状态事件（failed/cancelled）由调用方统一发射，这里只发进度。
+async fn stream_to_part_file(
+    opened: ResumableResponse,
+    part_path: &Path,
     cancellation_token: &CancellationToken,
     emitter: &DownloadEventEmitter,
 ) -> Result<(), String> {
-    let mut downloaded_size: u64 = 0;
-    let mut last_progress_update = 0u64;
+    let ResumableResponse {
+        response,
+        resume_from,
+        total_size,
+    } = opened;
+    let mut stream = response.bytes_stream();
 
-    let file = fs::File::create(file_path)
-        .await
-        .map_err(|e| format!("创建文件失败: {e}"))?;
+    let file = if resume_from > 0 {
+        fs::OpenOptions::new().append(true).open(part_path).await
+    } else {
+        fs::File::create(part_path).await
+    }
+    .map_err(|e| format!("创建文件失败: {e}"))?;
     let mut writer = BufWriter::with_capacity(WRITE_BUFFER_SIZE, file);
+
+    let mut downloaded_size = resume_from;
+    let mut last_progress_update = resume_from;
+    if resume_from > 0 {
+        // 让进度条直接跳到续传起点
+        emitter.emit_progress(
+            calculate_progress(downloaded_size, total_size),
+            downloaded_size,
+            total_size,
+        );
+    }
 
     while let Some(chunk_result) = stream.next().await {
         if cancellation_token.is_cancelled() {
-            drop(writer);
-            let _ = fs::remove_file(file_path).await;
+            let _ = writer.flush().await;
             return Err("下载已取消".to_string());
         }
 
-        let chunk = chunk_result.map_err(|e| {
-            let progress = calculate_progress(downloaded_size, total_size);
-            let msg = format!("下载出错: {e}");
-            emitter.emit_status(DownloadStatus::Failed(msg.clone()), progress);
-            msg
-        })?;
-
-        writer.write_all(&chunk).await.map_err(|e| {
-            let progress = calculate_progress(downloaded_size, total_size);
-            let msg = format!("写入文件失败: {e}");
-            emitter.emit_status(DownloadStatus::Failed(msg.clone()), progress);
-            msg
-        })?;
+        let chunk = chunk_result.map_err(|e| format!("下载出错: {e}"))?;
+        writer
+            .write_all(&chunk)
+            .await
+            .map_err(|e| format!("写入文件失败: {e}"))?;
 
         downloaded_size += chunk.len() as u64;
 
         if downloaded_size - last_progress_update >= PROGRESS_UPDATE_THRESHOLD
             || total_size.is_some_and(|total| downloaded_size >= total)
         {
-            emitter.emit_progress(calculate_progress(downloaded_size, total_size));
+            emitter.emit_progress(
+                calculate_progress(downloaded_size, total_size),
+                downloaded_size,
+                total_size,
+            );
             last_progress_update = downloaded_size;
         }
     }
@@ -183,6 +277,24 @@ async fn process_download_stream(
         .map_err(|e| format!("写入文件失败: {e}"))?;
 
     Ok(())
+}
+
+// 完整的可续传下载：<final>.part → 下载/续传 → 改名为最终文件
+async fn download_resumable(
+    url: &Url,
+    token: Option<&str>,
+    final_path: &Path,
+    cancellation_token: &CancellationToken,
+    emitter: &DownloadEventEmitter,
+) -> Result<(), String> {
+    let part_path = path_with_suffix(final_path, ".part");
+    let opened = open_resumable(url, token, &part_path).await?;
+    stream_to_part_file(opened, &part_path, cancellation_token, emitter).await?;
+    // Windows 上 rename 不能覆盖已存在文件，重新下载场景先移除旧文件
+    let _ = fs::remove_file(final_path).await;
+    fs::rename(&part_path, final_path)
+        .await
+        .map_err(|e| format!("保存文件失败: {e}"))
 }
 
 // 候选下载地址：详情声明的源 PDF 优先（部分教材的 pkg 没有 pdf.pdf 别名），
@@ -196,28 +308,6 @@ async fn download_candidates(url: &str) -> Vec<String> {
         candidates.push(url.to_string());
     }
     candidates
-}
-
-async fn send_request(url: &Url, token: Option<&str>) -> Result<reqwest::Response, String> {
-    let response = create_request(url, token)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {e}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                "下载失败：需要有效的 Access Token（请在「设置」中填写，或令牌可能已过期）"
-                    .to_string()
-            } else {
-                format!("下载失败: HTTP {status}")
-            },
-        );
-    }
-    Ok(response)
 }
 
 pub(super) async fn run(
@@ -240,33 +330,6 @@ pub(super) async fn run(
     let emitter = DownloadEventEmitter::new(app_handle, url.clone());
     emitter.emit_status(DownloadStatus::Downloading, 0);
 
-    // 依次尝试候选地址，取第一个成功的响应
-    let mut resolved: Option<(Url, reqwest::Response)> = None;
-    let mut last_error = "下载失败".to_string();
-    for candidate in download_candidates(url).await {
-        if cancellation_token.is_cancelled() {
-            return Err("下载已取消".to_string());
-        }
-        match Url::parse(&candidate) {
-            Ok(parsed) => match send_request(&parsed, token.as_deref()).await {
-                Ok(response) => {
-                    resolved = Some((parsed, response));
-                    break;
-                }
-                Err(e) => {
-                    log::warn!("地址不可用 {candidate}: {e}");
-                    last_error = e;
-                }
-            },
-            Err(e) => last_error = format!("无效的 URL: {e}"),
-        }
-    }
-
-    let Some((final_url, response)) = resolved else {
-        emitter.emit_status(DownloadStatus::Failed(last_error.clone()), 0);
-        return Err(last_error);
-    };
-
     let base_save_path = build_save_path(&textbook_info, &download_path);
     if !base_save_path.exists() {
         fs::create_dir_all(&base_save_path)
@@ -274,22 +337,66 @@ pub(super) async fn run(
             .map_err(|e| format!("创建下载目录失败: {e}"))?;
     }
 
-    let filename = format!(
-        "{}{}",
-        textbook_info.title,
-        extract_file_extension(&final_url)
-    );
-    let save_path = base_save_path.join(&filename);
+    // 依次尝试候选地址：初始请求失败换下一个；请求成功后按其扩展名确定目标文件，
+    // 已有 .part 半成品时自动续传
+    let mut last_error = "下载失败".to_string();
+    let mut completed: Option<PathBuf> = None;
+    for candidate in download_candidates(url).await {
+        if cancellation_token.is_cancelled() {
+            return Err("下载已取消".to_string());
+        }
+        let parsed = match Url::parse(&candidate) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                last_error = format!("无效的 URL: {e}");
+                continue;
+            }
+        };
 
-    let total_size = response.content_length();
-    process_download_stream(
-        response.bytes_stream(),
-        &save_path,
-        total_size,
-        &cancellation_token,
-        &emitter,
-    )
-    .await?;
+        let filename = format!(
+            "{}{}",
+            textbook_info.title,
+            extract_file_extension(&parsed)
+        );
+        let save_path = base_save_path.join(&filename);
+        let part_path = path_with_suffix(&save_path, ".part");
+
+        let opened = match open_resumable(&parsed, token.as_deref(), &part_path).await {
+            Ok(opened) => opened,
+            Err(e) => {
+                log::warn!("地址不可用 {candidate}: {e}");
+                last_error = e;
+                continue;
+            }
+        };
+
+        emitter.emit_target_path(&save_path);
+
+        let result = async {
+            stream_to_part_file(opened, &part_path, &cancellation_token, &emitter).await?;
+            // Windows 上 rename 不能覆盖已存在文件，重新下载场景先移除旧文件
+            let _ = fs::remove_file(&save_path).await;
+            fs::rename(&part_path, &save_path)
+                .await
+                .map_err(|e| format!("保存文件失败: {e}"))
+        }
+        .await;
+
+        if let Err(e) = result {
+            if !cancellation_token.is_cancelled() {
+                emitter.emit_status(DownloadStatus::Failed(e.clone()), 0);
+            }
+            return Err(e);
+        }
+
+        completed = Some(save_path);
+        break;
+    }
+
+    let Some(save_path) = completed else {
+        emitter.emit_status(DownloadStatus::Failed(last_error.clone()), 0);
+        return Err(last_error);
+    };
 
     log::info!("下载完成: {}", save_path.display());
 
@@ -316,7 +423,7 @@ fn sanitize_name(name: &str) -> String {
     }
 }
 
-/// 下载单个课程资源：视频走 m3u8 解密流程，其余走普通流式下载。
+/// 下载单个课程资源：视频走 m3u8 解密流程（按切片续传），其余走普通流式下载（Range 续传）。
 /// 事件以 resource.download_url 为键，与前端下载状态仓库对应。
 pub(super) async fn run_course(
     app_handle: tauri::AppHandle,
@@ -362,8 +469,9 @@ pub(super) async fn run_course(
         resource.format.clone()
     };
     let save_path = base_save_path.join(format!("{title}.{ext}"));
+    emitter.emit_target_path(&save_path);
 
-    let final_path = if resource.is_video {
+    let download_result: Result<PathBuf, String> = if resource.is_video {
         // 视频合成后的真实路径可能是 .mp4（ffmpeg 转封装成功）或 .ts（回退）
         super::m3u8::download(
             &url,
@@ -373,23 +481,26 @@ pub(super) async fn run_course(
             &cancellation_token,
             &emitter,
         )
-        .await?
+        .await
     } else {
         let parsed = Url::parse(&url).map_err(|e| format!("无效的 URL: {e}"))?;
-        let response = send_request(&parsed, token.as_deref()).await.inspect_err(|e| {
-            emitter.emit_status(DownloadStatus::Failed(e.clone()), 0);
-        })?;
-        let total_size = response.content_length();
-        process_download_stream(
-            response.bytes_stream(),
+        download_resumable(
+            &parsed,
+            token.as_deref(),
             &save_path,
-            total_size,
             &cancellation_token,
             &emitter,
         )
-        .await?;
-        save_path
+        .await
+        .map(|_| save_path)
     };
+
+    let final_path = download_result.inspect_err(|e| {
+        // 取消不算失败，cancelled 事件由命令包装层统一补发
+        if !cancellation_token.is_cancelled() {
+            emitter.emit_status(DownloadStatus::Failed(e.clone()), 0);
+        }
+    })?;
 
     log::info!("课程资源下载完成: {}", final_path.display());
     let file_path_str = final_path.to_string_lossy().into_owned();

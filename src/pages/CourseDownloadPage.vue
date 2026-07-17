@@ -5,9 +5,15 @@ export default { name: 'CourseDownloadPage' };
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
 import { ElInput, ElButton, ElMessage, ElIcon, ElImage, ElTag } from 'element-plus';
-import { Search, Download, VideoPlay, Document, Loading, Check, Close, Refresh, FolderOpened } from '@element-plus/icons-vue';
+import { Search, Download, VideoPlay, VideoPause, Document, Loading, Check, Close, Refresh, FolderOpened } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
-import { useDownload } from '@/composables/useDownloadManager';
+import {
+  enqueueDownload,
+  pauseDownload,
+  resumeDownload,
+  useDownload,
+  type DownloadStatus,
+} from '@/composables/useDownloadManager';
 import { readDownloadSettings } from '@/utils/settings';
 import type { CourseParseResult, CourseResource } from '@/types';
 
@@ -15,8 +21,24 @@ const url = ref('');
 const parsing = ref(false);
 const result = ref<CourseParseResult | null>(null);
 
-// 每个资源的下载状态从共享仓库取，key 为其 download_url（与后端取消令牌一致）
+// 每个资源的下载状态从共享任务池取，key 为其 download_url（与后端取消令牌一致）
 const stateOf = (resource: CourseResource) => useDownload(resource.download_url);
+
+const isActiveStatus = (status: DownloadStatus) => status === 'downloading' || status === 'queued';
+const isResumableStatus = (status: DownloadStatus) =>
+  status === 'paused' || status === 'interrupted' || status === 'failed';
+
+const primaryText = (status: DownloadStatus) => {
+  switch (status) {
+    case 'downloading': return '下载中';
+    case 'queued': return '排队中';
+    case 'paused': return '继续';
+    case 'interrupted': return '继续';
+    case 'completed': return '重新下载';
+    case 'failed': return '重试';
+    default: return '下载';
+  }
+};
 
 // 封面走后端代理转 base64（webview 直连外部图片不稳定，同教材封面做法），按原始 URL 缓存。
 // 值为 'loading' 表示请求中（显示 loading），'' 表示失败/无封面（显示占位图），data URL 表示成功
@@ -66,20 +88,20 @@ const handleParse = async () => {
   }
 };
 
-const startDownload = (resource: CourseResource) => {
+// 入队单个资源；排队与并发由全局下载池调度
+const enqueueResource = (resource: CourseResource): boolean => {
   const settings = readDownloadSettings();
   if (!settings.downloadPath) {
     ElMessage.warning('下载路径未设置，请前往设置页面配置');
-    return;
+    return false;
   }
 
-  const state = stateOf(resource);
-  state.status = 'downloading';
-  state.progress = 0;
-  state.error = '';
-
-  invoke('download_course_resource', {
-    resource: {
+  return enqueueDownload({
+    url: resource.download_url,
+    kind: resource.is_video ? 'course-video' : 'course-doc',
+    title: resource.title,
+    subtitle: result.value?.title ?? '',
+    payload: {
       download_url: resource.download_url,
       title: resource.title,
       format: resource.format,
@@ -88,18 +110,21 @@ const startDownload = (resource: CourseResource) => {
       save_by_category: settings.saveByCategory,
       category_path: result.value?.category_path ?? [],
     },
-    token: settings.token,
-    downloadPath: settings.downloadPath,
-    ffmpegPath: settings.ffmpegPath,
-  }).catch((error) => {
-    ElMessage.error('下载启动失败: ' + error);
   });
 };
 
-const cancelDownload = (resource: CourseResource) => {
-  invoke('cancel_download', { url: resource.download_url }).catch((error) => {
-    console.error('取消下载失败:', error);
-  });
+// 主按钮：暂停/中断/失败走继续（续传），其余（重新）入队
+const startDownload = (resource: CourseResource) => {
+  const state = stateOf(resource);
+  if (isResumableStatus(state.status)) {
+    resumeDownload(resource.download_url);
+    return;
+  }
+  enqueueResource(resource);
+};
+
+const pauseResource = (resource: CourseResource) => {
+  pauseDownload(resource.download_url);
 };
 
 // 在系统文件管理器中定位已下载的文件
@@ -114,6 +139,7 @@ const revealResource = (resource: CourseResource) => {
   });
 };
 
+// 批量下载 = 未完成的资源全部入队
 const handleBatchDownload = () => {
   const settings = readDownloadSettings();
   if (!settings.downloadPath) {
@@ -122,34 +148,25 @@ const handleBatchDownload = () => {
   }
   if (!result.value?.resources.length) return;
 
+  let queued = 0;
   for (const resource of result.value.resources) {
     const state = stateOf(resource);
-    if (state.status !== 'completed') {
-      state.status = 'downloading';
-      state.progress = 0;
-      state.error = '';
+    if (state.status === 'completed') continue;
+    if (isResumableStatus(state.status)) {
+      resumeDownload(resource.download_url);
+      queued += 1;
+    } else if (enqueueResource(resource)) {
+      queued += 1;
     }
   }
 
-  invoke('batch_download_course_resources', {
-    resources: result.value.resources.map((r) => ({
-      download_url: r.download_url,
-      title: r.title,
-      format: r.format,
-      is_video: r.is_video,
-      course_title: result.value?.title ?? null,
-      save_by_category: settings.saveByCategory,
-      category_path: result.value?.category_path ?? [],
-    })),
-    token: settings.token,
-    downloadPath: settings.downloadPath,
-    ffmpegPath: settings.ffmpegPath,
-    threadCount: settings.threadCount,
-  }).catch((error) => {
-    ElMessage.error('批量下载启动失败: ' + error);
-  });
+  if (queued > 0) {
+    ElMessage.success(`已将 ${queued} 个资源加入下载队列`);
+  } else {
+    ElMessage.info('资源都已下载完成或在队列中');
+  }
 };
-// 批量下载完成/失败提示由 App.vue 全局统一处理，避免 keep-alive 下重复弹窗
+// 下载完成/失败的汇总提示由全局下载池统一处理
 </script>
 
 <template>
@@ -259,6 +276,22 @@ const handleBatchDownload = () => {
                 </div>
               </div>
 
+              <div v-else-if="stateOf(resource).status === 'queued'" class="progress-block">
+                <el-progress :percentage="stateOf(resource).progress" :stroke-width="8" :show-text="false" status="warning" />
+                <div class="progress-meta">
+                  <span>已加入下载队列，等待空闲线程…</span>
+                </div>
+              </div>
+
+              <div v-else-if="stateOf(resource).status === 'paused' || stateOf(resource).status === 'interrupted'"
+                class="progress-block">
+                <el-progress :percentage="stateOf(resource).progress" :stroke-width="8" :show-text="false" status="warning" />
+                <div class="progress-meta">
+                  <span>{{ stateOf(resource).status === 'paused' ? '已暂停，可继续下载' : '上次未完成，可继续下载' }}</span>
+                  <span>{{ stateOf(resource).progress }}%</span>
+                </div>
+              </div>
+
               <div v-else-if="stateOf(resource).status === 'completed'" class="status-line status-success">
                 <el-icon :size="14"><Check /></el-icon>
                 下载完成
@@ -277,7 +310,7 @@ const handleBatchDownload = () => {
                 <el-button
                   size="small"
                   :type="stateOf(resource).status === 'completed' ? 'success' : 'primary'"
-                  :disabled="stateOf(resource).status === 'downloading'"
+                  :disabled="isActiveStatus(stateOf(resource).status)"
                   :loading="stateOf(resource).status === 'downloading'"
                   @click="startDownload(resource)"
                 >
@@ -285,20 +318,17 @@ const handleBatchDownload = () => {
                     <Refresh v-if="stateOf(resource).status === 'completed'" />
                     <Download v-else />
                   </el-icon>
-                  {{
-                    stateOf(resource).status === 'downloading' ? '下载中' :
-                    stateOf(resource).status === 'completed' ? '重新下载' :
-                    stateOf(resource).status === 'failed' ? '重试' : '下载'
-                  }}
+                  {{ primaryText(stateOf(resource).status) }}
                 </el-button>
                 <el-button
-                  v-if="stateOf(resource).status === 'downloading'"
+                  v-if="isActiveStatus(stateOf(resource).status)"
                   size="small"
-                  type="danger"
+                  type="warning"
                   plain
-                  @click="cancelDownload(resource)"
+                  @click="pauseResource(resource)"
                 >
-                  取消
+                  <el-icon class="mr-1"><VideoPause /></el-icon>
+                  暂停
                 </el-button>
                 <el-button
                   v-if="stateOf(resource).status === 'completed'"

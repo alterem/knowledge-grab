@@ -141,6 +141,40 @@
           </el-form-item>
         </el-form>
       </section>
+
+      <section class="settings-card">
+        <div class="card-title">关于与更新</div>
+        <el-form label-position="left" label-width="120px">
+          <el-form-item label="当前版本">
+            <div class="flex items-center space-x-2">
+              <el-tag effect="plain">v{{ appVersion || '…' }}</el-tag>
+              <el-button type="primary" plain @click="handleCheckUpdate"
+                :loading="updater.status === 'checking'" :disabled="updater.status === 'downloading' || updater.status === 'installing'">
+                检查更新
+              </el-button>
+              <el-button link type="primary" @click="openReleases">前往发布页</el-button>
+            </div>
+          </el-form-item>
+          <el-form-item v-if="updater.status === 'downloading' || updater.status === 'installing'" label="更新进度">
+            <div class="w-full">
+              <el-progress :percentage="updateProgress" :indeterminate="!updater.total" :stroke-width="8" />
+              <div class="mt-1 text-xs form-hint">
+                {{
+                  updater.status === 'installing'
+                    ? '下载完成，正在安装，应用稍后将自动重启…'
+                    : `正在下载更新 ${formatBytes(updater.downloaded)}${updater.total ? ' / ' + formatBytes(updater.total) : ''}`
+                }}
+              </div>
+            </div>
+          </el-form-item>
+          <el-form-item label="自动检查更新">
+            <div class="flex items-center space-x-2">
+              <el-switch v-model="autoCheckUpdate" @change="onAutoCheckChange" />
+              <span class="text-sm form-hint">启动时静默检查新版本，发现更新时提醒（不会自动安装）</span>
+            </div>
+          </el-form-item>
+        </el-form>
+      </section>
     </div>
 
     <div class="settings-footer">
@@ -156,13 +190,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, inject, type Ref } from 'vue';
-import { ElInput, ElButton, ElMessage, ElForm, ElFormItem, ElSwitch, ElSlider, ElMessageBox, ElIcon } from 'element-plus';
+import { ref, computed, onMounted, onUnmounted, inject, type Ref } from 'vue';
+import { ElInput, ElButton, ElMessage, ElForm, ElFormItem, ElSwitch, ElSlider, ElMessageBox, ElIcon, ElTag, ElProgress } from 'element-plus';
 import { Check, CopyDocument } from '@element-plus/icons-vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { STORAGE_KEYS } from '@/utils/settings';
+import { formatBytes } from '@/utils/format';
+import {
+  RELEASES_URL,
+  checkForUpdates,
+  isAutoCheckEnabled,
+  setAutoCheckEnabled,
+  useUpdaterState,
+} from '@/composables/useUpdater';
 
 const isDarkMode = inject('isDarkMode') as Ref<boolean>;
 const toggleTheme = inject('toggleTheme') as () => void;
@@ -178,6 +221,26 @@ const showMacKeyHelp = ref(false);
 const ffmpegPath = ref('');
 const showFfmpegHelp = ref(false);
 const checkingFfmpeg = ref(false);
+
+// 关于与更新
+const appVersion = ref('');
+const updater = useUpdaterState();
+const autoCheckUpdate = ref(isAutoCheckEnabled());
+const updateProgress = computed(() =>
+  updater.total ? Math.min(100, Math.round((updater.downloaded / updater.total) * 100)) : 0
+);
+
+const handleCheckUpdate = () => {
+  void checkForUpdates();
+};
+
+const onAutoCheckChange = (value: string | number | boolean) => {
+  setAutoCheckEnabled(Boolean(value));
+};
+
+const openReleases = () => {
+  invoke('open_url', { url: RELEASES_URL }).catch((err) => console.error('打开发布页失败:', err));
+};
 
 // 从 smartedu.cn 的 localStorage 读取登录凭据（"...&token" 键的 value 里含 access_token 与 mac_key）。
 // access_token 用于所有下载鉴权；mac_key 供视频课件的 doc-center 签名下载使用。
@@ -220,6 +283,10 @@ onMounted(async () => {
   threadCount.value = parseInt(localStorage.getItem(STORAGE_KEYS.threadCount) || '4', 10);
   saveByCategory.value = localStorage.getItem(STORAGE_KEYS.saveByCategory) === 'true';
   ffmpegPath.value = localStorage.getItem(STORAGE_KEYS.ffmpegPath) || '';
+
+  getVersion()
+    .then((version) => (appVersion.value = version))
+    .catch((err) => console.error('获取应用版本失败:', err));
 
   // 令牌的持久化由 App.vue 全局处理，这里只在设置页打开时同步输入框显示
   unlistenTokenCaptured = await listen<{ token: string; mac_key?: string }>(

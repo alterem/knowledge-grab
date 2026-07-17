@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ElMenu, ElMenuItem, ElIcon } from 'element-plus';
-import { HomeFilled, Reading, Tools, ChatRound, QuestionFilled, VideoCamera } from '@element-plus/icons-vue';
+import { ElMenu, ElMenuItem, ElIcon, ElBadge } from 'element-plus';
+import { HomeFilled, Reading, Tools, ChatRound, QuestionFilled, VideoCamera, Download } from '@element-plus/icons-vue';
 import { useRouter, useRoute } from 'vue-router';
 import { computed, markRaw, type Component } from 'vue';
+import { useDownloadPool } from '@/composables/useDownloadManager';
 
 const router = useRouter();
 const route = useRoute();
+// 「下载管理」项的徽标：进行中 + 排队中的任务数
+const { activeCount } = useDownloadPool();
 
 interface MenuItem {
   index: string;
@@ -18,9 +21,10 @@ const menuItems: MenuItem[] = [
   { index: '0', title: '首页', icon: markRaw(HomeFilled), path: '/' },
   { index: '1', title: '课本下载', icon: markRaw(Reading), path: '/textbook-download' },
   { index: '2', title: '课程&视频下载', icon: markRaw(VideoCamera), path: '/course-download' },
+  { index: '6', title: '下载管理', icon: markRaw(Download), path: '/downloads' },
   { index: '3', title: '设置', icon: markRaw(Tools), path: '/settings' },
   { index: '4', title: '免责声明', icon: markRaw(ChatRound), path: '/disclaimer' },
-  { index: '5', title: '关于&帮助', icon: markRaw(QuestionFilled), path: '/help' },
+  { index: '5', title: '使用帮助', icon: markRaw(QuestionFilled), path: '/help' },
 ];
 
 const activeIndex = computed(() => {
@@ -42,6 +46,12 @@ const handleSelect = (index: string) => {
         <component :is="item.icon" />
       </el-icon>
       <span>{{ item.title }}</span>
+      <el-badge
+        v-if="item.path === '/downloads' && activeCount > 0"
+        :value="activeCount"
+        :max="99"
+        class="menu-badge"
+      />
     </el-menu-item>
   </el-menu>
 </template>
@@ -78,5 +88,17 @@ const handleSelect = (index: string) => {
 
 .sidebar-menu :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
   color: var(--el-color-primary);
+}
+
+/* 下载管理项的任务数徽标，靠右显示 */
+.menu-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.menu-badge :deep(.el-badge__content) {
+  position: static;
+  transform: none;
 }
 </style>
