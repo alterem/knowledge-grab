@@ -1,0 +1,9 @@
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - autoprefixer@10.5.3
+onlyBuiltDependencies:
+  - '@tailwindcss/oxide'
+  - esbuild
+  - javascript-obfuscator
+  - vue-demi

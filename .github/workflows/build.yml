@@ -1,0 +1,208 @@
+name: Build and Release Tauri App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# PR 上重复推送时取消旧构建；tag 构建不取消，避免误杀发版
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64
+            bundle: |
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: windows-arm64
+            bundle: |
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+              src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-x64
+            bundle: src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/*/*
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: macos-arm64
+            bundle: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: macos-x64
+            bundle: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # pnpm 必须先于 setup-node 安装，cache: pnpm 才能生效
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+          run_install: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # 发版 tag 必须与 tauri.conf.json 的 version 一致，否则 updater 版本比较会错乱
+      - name: Verify Version Matches Tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 tauri.conf.json version=${CONF_VERSION} 不一致，请先统一版本号再打 tag"
+            exit 1
+          fi
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Clean Tauri WiX Cache
+        if: runner.os == 'Windows'
+        run: |
+          Remove-Item -Path "$env:LOCALAPPDATA\tauri\WixTools*" -Recurse -Force -ErrorAction SilentlyContinue
+        shell: pwsh
+
+      # tag 构建追加 updater 配置（createUpdaterArtifacts 需要签名私钥，PR 构建不启用以免无 secrets 失败）
+      - name: Build (${{ matrix.target }})
+        run: pnpm tauri build --target ${{ matrix.target }} ${{ startsWith(github.ref, 'refs/tags/') && '--config src-tauri/tauri.updater.conf.json' || '' }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bundle }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "::debug::Previous tag found: '$PREVIOUS_TAG'"
+
+          CHANGELOG_CONTENT=""
+          GIT_LOG_COMMAND=""
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            GIT_LOG_COMMAND='git log --pretty=format:"* %s (%h)"'
+            CHANGELOG_CONTENT=$(git log --pretty=format:"* %s (%h)")
+          else
+            GIT_LOG_COMMAND="git log --pretty=format:\"* %s (%h)\" $PREVIOUS_TAG..HEAD"
+            CHANGELOG_CONTENT=$(git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD)
+          fi
+          echo "::debug::Executing command: $GIT_LOG_COMMAND"
+          echo "::debug::Raw git log output:"
+          echo "$CHANGELOG_CONTENT"
+          echo "::debug::End of raw git log output."
+          DELIMITER=$(openssl rand -hex 8)
+          echo "::debug::Writing to GITHUB_OUTPUT with delimiter $DELIMITER"
+          printf "%s<<%s\n%s\n%s\n" "CHANGELOG" "$DELIMITER" "$CHANGELOG_CONTENT" "$DELIMITER" >> "$GITHUB_OUTPUT"
+          echo "::debug::Finished writing to GITHUB_OUTPUT."
+        shell: bash
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: List Files
+        run: find artifacts -type f | sort
+
+      # 生成 updater 静态清单（同时把两个 macOS 架构的同名 .app.tar.gz 重命名去重）
+      - name: Generate Updater Manifest
+        env:
+          RELEASE_NOTES: ${{ steps.changelog.outputs.CHANGELOG }}
+        run: node scripts/generate-latest-json.mjs artifacts "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            artifacts/windows-x64/msi/*.msi
+            artifacts/windows-x64/nsis/*-setup.exe
+            artifacts/windows-x64/nsis/*-setup.exe.sig
+            artifacts/windows-arm64/msi/*.msi
+            artifacts/windows-arm64/nsis/*-setup.exe
+            artifacts/windows-arm64/nsis/*-setup.exe.sig
+            artifacts/linux-x64/deb/*.deb
+            artifacts/linux-x64/rpm/*.rpm
+            artifacts/linux-x64/appimage/*.AppImage
+            artifacts/linux-x64/appimage/*.AppImage.sig
+            artifacts/macos-arm64/dmg/*.dmg
+            artifacts/macos-arm64/macos/*.app.tar.gz
+            artifacts/macos-arm64/macos/*.app.tar.gz.sig
+            artifacts/macos-x64/dmg/*.dmg
+            artifacts/macos-x64/macos/*.app.tar.gz
+            artifacts/macos-x64/macos/*.app.tar.gz.sig
+            artifacts/latest.json
+          name: Release ${{ github.ref_name }}
+          body: |
+            ### Release ${{ github.ref_name }}
+
+            #### Changelog
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ---
+
+            See the assets below for the builds.
+          draft: false
+          prerelease: false

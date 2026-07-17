@@ -1,0 +1,38 @@
+{
+  "name": "knowledge-grab",
+  "private": true,
+  "version": "2.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "clean": "bash scripts/clean.sh",
+    "clean:all": "bash scripts/clean.sh --all",
+    "clean:deps": "bash scripts/clean.sh --deps",
+    "bump": "bash scripts/bump-version.sh",
+    "release": "bash scripts/bump-version.sh"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@tailwindcss/vite": "^4.3.2",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "~2.7.1",
+    "@tauri-apps/plugin-fs": "~2.5.1",
+    "@tauri-apps/plugin-process": "^2.0.0",
+    "element-plus": "^2.14.3",
+    "tailwindcss": "^4.3.2",
+    "vue": "^3.5.39",
+    "vue-router": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^26.1.1",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "@vue/tsconfig": "^0.9.1",
+    "rollup-plugin-obfuscator": "^1.1.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.1.4",
+    "vue-tsc": "^3.3.7"
+  }
+}
