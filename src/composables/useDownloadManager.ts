@@ -81,18 +81,25 @@ interface StatusPayload {
   progress?: number;
   error?: string;
   filePath?: string;
+  // 下载成功但结果与预期有出入（如 ffmpeg 不可用，视频停在 .ts）
+  warning?: string | null;
 }
 
 interface ProgressPayload {
   url: string;
   progress: number;
   downloadedBytes?: number;
+  /** 本次真正走网络的字节数（不含续传时磁盘已有的部分），用于算速度 */
+  transferredBytes?: number;
   totalBytes?: number | null;
 }
 
 const STORAGE_KEY = 'download_tasks_v1';
 const MAX_RECORDS = 300;
 const SAVE_THROTTLE_MS = 1000;
+
+// 已提示过的告警文案；批量下载时同一原因不重复弹窗
+const warnedMessages = new Set<string>();
 
 // 以下载 URL 为键的全局任务表。所有卡片/管理页共享一对事件监听，
 // 避免 N 个可见条目各注册 N 对监听、每个事件被重复检查 N 次
@@ -103,8 +110,19 @@ const inflight = new Set<string>();
 // 各任务 invoke 的完成信号，删除任务时等它结束再清理磁盘半成品
 const inflightPromises = new Map<string, Promise<void>>();
 
-// 速度计算的上次采样（非响应式即可）
+// 速度采样锚点（非响应式即可）。按时间窗结算，而不是逐事件求瞬时值：
+// m3u8 是 8 路并发，切片常扎堆在同一两毫秒内完成，「一个切片 ÷ 1ms」会
+// 算出 GB/s 级的假速度（Date.now 的分辨率就是 1ms，分母再小不下去）
 const speedSamples = new Map<string, { bytes: number; time: number }>();
+// 最近一次进度事件的时间，用于停滞时把速度归零
+const lastProgressAt = new Map<string, number>();
+
+// 速度结算的最小时间窗：分母短于它，噪声会被放大成离谱数字
+const SPEED_WINDOW_MS = 700;
+// 超过这个时间没有新进度就算停滞（网络卡住、或视频进入拼接/转封装阶段），
+// 速度归零而不是把最后一个数字一直挂在界面上
+const SPEED_STALE_MS = 3000;
+let speedTimer: ReturnType<typeof setInterval> | null = null;
 
 // 一轮连续下载的统计，队列排空时用于汇总提示（替代原 batch-download-* 事件）
 let burstStarted = 0;
@@ -263,6 +281,7 @@ async function startTask(task: DownloadTask): Promise<void> {
   task.error = '';
   task.speed = 0;
   speedSamples.delete(task.url);
+  lastProgressAt.delete(task.url);
 
   try {
     if (task.kind === 'textbook') {
@@ -387,6 +406,11 @@ function handleStatusEvent(payload: StatusPayload): void {
       task.completedAt = Date.now();
       if (payload.filePath) task.filePath = payload.filePath;
       if (task.totalBytes > 0) task.downloadedBytes = task.totalBytes;
+      // 同一原因（如 ffmpeg 不可用）会对每个视频各报一次，去重后只提示一条
+      if (payload.warning && !warnedMessages.has(payload.warning)) {
+        warnedMessages.add(payload.warning);
+        ElMessage.warning({ message: payload.warning, duration: 8000, showClose: true });
+      }
       break;
     case 'failed':
       // 进度保留在失败处，便于用户判断；错误详情展示在卡片上
@@ -410,20 +434,46 @@ function handleProgressEvent(payload: ProgressPayload): void {
   const task = ensureTask(payload.url);
   task.progress = Math.min(Math.max(0, payload.progress), 100);
   if (typeof payload.downloadedBytes === 'number') {
-    const now = Date.now();
-    const prev = speedSamples.get(task.url);
-    if (prev && now > prev.time && payload.downloadedBytes >= prev.bytes) {
-      const instant = ((payload.downloadedBytes - prev.bytes) / (now - prev.time)) * 1000;
-      // 指数平滑，避免速度数字跳动
-      task.speed = task.speed > 0 ? task.speed * 0.4 + instant * 0.6 : instant;
-    }
-    speedSamples.set(task.url, { bytes: payload.downloadedBytes, time: now });
     task.downloadedBytes = payload.downloadedBytes;
+  }
+  // 速度只认走网络的字节：续传时磁盘上已有的切片会在几毫秒内全部「完成」，
+  // 把它们计入速度会算出几百 MB/s
+  const transferred =
+    typeof payload.transferredBytes === 'number'
+      ? payload.transferredBytes
+      : payload.downloadedBytes;
+  if (typeof transferred === 'number') {
+    const now = Date.now();
+    lastProgressAt.set(task.url, now);
+    const anchor = speedSamples.get(task.url);
+    if (!anchor || transferred < anchor.bytes) {
+      // 首个样本，或字节数回退（重新开始）：只重新锚定，本次不出数
+      speedSamples.set(task.url, { bytes: transferred, time: now });
+    } else if (now - anchor.time >= SPEED_WINDOW_MS) {
+      const windowed = ((transferred - anchor.bytes) / (now - anchor.time)) * 1000;
+      // 指数平滑，避免速度数字跳动；已按窗口取过均值，这里让历史值占多数权重
+      task.speed = task.speed > 0 ? task.speed * 0.6 + windowed * 0.4 : windowed;
+      speedSamples.set(task.url, { bytes: transferred, time: now });
+    }
   }
   if (typeof payload.totalBytes === 'number' && payload.totalBytes > 0) {
     task.totalBytes = payload.totalBytes;
   }
   scheduleSave();
+}
+
+// 进度事件断流时把速度清掉：下载中的任务在拼接/转封装阶段不再上报字节，
+// 界面不该继续显示一个早已过期的速度
+function sweepStaleSpeeds(): void {
+  const now = Date.now();
+  for (const task of tasks.values()) {
+    if (task.speed <= 0) continue;
+    const last = lastProgressAt.get(task.url) ?? 0;
+    if (task.status !== 'downloading' || now - last > SPEED_STALE_MS) {
+      task.speed = 0;
+      speedSamples.delete(task.url);
+    }
+  }
 }
 
 /** 初始化下载池：注册事件监听并载入历史记录。幂等，App 启动时调用一次即可 */
@@ -439,6 +489,7 @@ export function initDownloadManager(): Promise<void> {
     unlistenProgress = await listen<ProgressPayload>('download-progress', ({ payload }) =>
       handleProgressEvent(payload)
     );
+    speedTimer ??= setInterval(sweepStaleSpeeds, 1000);
   })();
 
   return initPromise;
@@ -480,6 +531,7 @@ export function enqueueDownload(input: EnqueueInput): boolean {
   task.createdAt = Date.now();
   task.completedAt = null;
   speedSamples.delete(task.url);
+  lastProgressAt.delete(task.url);
 
   evictOldRecords();
   scheduleSave(true);
@@ -547,6 +599,7 @@ export async function removeDownload(url: string, removeArtifacts = true): Promi
   const finished = task.status === 'completed';
   tasks.delete(url);
   speedSamples.delete(url);
+  lastProgressAt.delete(url);
   scheduleSave(true);
   pump();
 
@@ -563,6 +616,7 @@ export function clearFinishedDownloads(): void {
     if (task.status === 'completed') {
       tasks.delete(task.url);
       speedSamples.delete(task.url);
+      lastProgressAt.delete(task.url);
     }
   }
   scheduleSave(true);
@@ -602,5 +656,9 @@ export async function disposeDownloadManager(): Promise<void> {
   unlistenProgress?.();
   unlistenStatus = null;
   unlistenProgress = null;
+  if (speedTimer) {
+    clearInterval(speedTimer);
+    speedTimer = null;
+  }
   initPromise = null;
 }

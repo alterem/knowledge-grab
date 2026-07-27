@@ -292,8 +292,8 @@ async fn assemble_ts(
     Ok(())
 }
 
-/// 下载并解密整个 m3u8 视频。返回实际写入的文件路径：
-/// ffmpeg 可用则转封装成 out_path（通常 .mp4），否则保留裸拼的 .ts。
+/// 下载并解密整个 m3u8 视频。返回实际写入的文件路径，以及一条可选的告警
+/// （配置了 ffmpeg 却没能转封装成 .mp4 时，需要让用户知道原因，而不是默默存成 .ts）。
 /// 中断/取消会保留 <out_path>.parts/ 中已下载的切片，下次调用自动续传。
 pub(super) async fn download(
     m3u8_url: &str,
@@ -302,7 +302,7 @@ pub(super) async fn download(
     ffmpeg_path: Option<&str>,
     cancellation_token: &CancellationToken,
     emitter: &DownloadEventEmitter,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<(std::path::PathBuf, Option<String>), String> {
     // 1. 拉 m3u8
     let content = get_text_authed(m3u8_url, token)
         .await
@@ -325,16 +325,19 @@ pub(super) async fn download(
     let parts_dir = path_with_suffix(out_path, ".parts");
     prepare_parts_dir(&parts_dir, m3u8_url, total).await?;
 
-    emitter.emit_progress(0, 0, None);
+    emitter.emit_progress(0, 0, 0, None);
 
     // 4. 并发下载 + 解密切片，逐片落盘；已存在的切片直接跳过（续传）
     let done_count = Arc::new(AtomicUsize::new(0));
     let done_bytes = Arc::new(AtomicU64::new(0));
+    // 续传时跳过的切片字节：算体积要带上，算速度必须刨掉（它们是从磁盘瞬间"完成"的）
+    let cached_bytes = Arc::new(AtomicU64::new(0));
     let results: Vec<Result<(), String>> = stream::iter(
         playlist.segments.iter().cloned().enumerate().map(|(idx, seg_url)| {
             let key_info = key_info.clone();
             let done_count = Arc::clone(&done_count);
             let done_bytes = Arc::clone(&done_bytes);
+            let cached_bytes = Arc::clone(&cached_bytes);
             let token = token.map(str::to_string);
             let seg_path = parts_dir.join(segment_file_name(idx));
             let tmp_path = parts_dir.join(format!("{}.tmp", segment_file_name(idx)));
@@ -343,9 +346,13 @@ pub(super) async fn download(
                     return Err("下载已取消".to_string());
                 }
 
+                let mut from_cache = false;
                 let seg_len = match fs::metadata(&seg_path).await {
                     // 已有完整切片（写入走 tmp+rename，存在即完整），跳过下载
-                    Ok(meta) if meta.len() > 0 => meta.len(),
+                    Ok(meta) if meta.len() > 0 => {
+                        from_cache = true;
+                        meta.len()
+                    }
                     _ => {
                         let bytes = fetch_segment_with_retry(
                             &seg_url,
@@ -369,7 +376,17 @@ pub(super) async fn download(
                 // 进度按已就绪切片数上报，字节数供前端算速度
                 let done = done_count.fetch_add(1, Ordering::SeqCst) + 1;
                 let bytes_sum = done_bytes.fetch_add(seg_len, Ordering::SeqCst) + seg_len;
-                emitter.emit_progress((done as f64 / total as f64 * 100.0) as u32, bytes_sum, None);
+                let cached_sum = if from_cache {
+                    cached_bytes.fetch_add(seg_len, Ordering::SeqCst) + seg_len
+                } else {
+                    cached_bytes.load(Ordering::SeqCst)
+                };
+                emitter.emit_progress(
+                    (done as f64 / total as f64 * 100.0) as u32,
+                    bytes_sum,
+                    bytes_sum.saturating_sub(cached_sum),
+                    None,
+                );
                 Ok(())
             }
         }),
@@ -389,24 +406,36 @@ pub(super) async fn download(
     let ts_path = out_path.with_extension("ts");
     assemble_ts(&ts_path, &parts_dir, total, cancellation_token).await?;
 
-    // ffmpeg 可用则 remux 成目标容器（通常 .mp4），失败或缺失则保留 .ts
-    if let Some(ff) = ffmpeg_path.filter(|p| !p.is_empty()) {
-        if out_path != ts_path {
-            match remux(ff, &ts_path, out_path).await {
+    // ffmpeg 可用则 remux 成目标容器（通常 .mp4）；否则保留 .ts 并把原因带给用户，
+    // 免得「配了 ffmpeg 结果还是 ts」看上去像是正常结果
+    let mut warning = None;
+    if out_path != ts_path {
+        match ffmpeg_path.filter(|p| !p.is_empty()) {
+            Some(ff) => match remux(ff, &ts_path, out_path).await {
                 Ok(()) => {
                     let _ = fs::remove_file(&ts_path).await;
                     let _ = fs::remove_dir_all(&parts_dir).await;
-                    return Ok(out_path.to_path_buf());
+                    return Ok((out_path.to_path_buf(), None));
                 }
                 Err(e) => {
                     log::warn!("ffmpeg 转封装失败，保留 .ts: {e}");
+                    warning = Some(format!(
+                        "视频已保存为 .ts：ffmpeg 转封装失败（{e}）。请在「设置」中点「检测」确认 ffmpeg 可用，\
+                         并注意可执行文件需与当前系统架构一致（Apple 芯片的 Mac 需要 arm64 版本）。"
+                    ));
                 }
+            },
+            None => {
+                warning = Some(
+                    "视频已保存为 .ts：未配置 ffmpeg，无法转封装为 .mp4。可在「设置」中指定 ffmpeg 路径。"
+                        .to_string(),
+                );
             }
         }
     }
 
     let _ = fs::remove_dir_all(&parts_dir).await;
-    Ok(ts_path)
+    Ok((ts_path, warning))
 }
 
 // 调 ffmpeg 把 .ts 无损转封装成目标容器（-c copy，不重新编码）

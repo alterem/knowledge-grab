@@ -251,7 +251,9 @@ const handleBatchDownload = () => {
                 <el-tag size="small" :type="resource.is_video ? 'success' : 'warning'" effect="plain">
                   {{ resource.is_video ? '视频' : '课件' }}
                 </el-tag>
-                <span class="res-format">{{ resource.format.toUpperCase() }}</span>
+                <el-tag size="small" type="info" effect="plain">
+                  {{ resource.format.toUpperCase() }}
+                </el-tag>
                 <el-tag
                   v-for="seg in result.category_path"
                   :key="seg"
@@ -526,11 +528,6 @@ html.dark .res-card:hover {
   flex-wrap: wrap;
   gap: 8px;
   row-gap: 4px;
-}
-
-.res-format {
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 .progress-block {

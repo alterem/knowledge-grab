@@ -55,14 +55,24 @@ impl DownloadEventEmitter {
         let _ = self.app_handle.emit("download-status", event_data);
     }
 
-    // 进度附带字节数，前端据此计算速度；总大小未知时（m3u8 按切片计数）为 null
-    pub(super) fn emit_progress(&self, progress: u32, downloaded_bytes: u64, total_bytes: Option<u64>) {
+    // 进度附带两个字节数：downloaded_bytes 是磁盘上已就绪的总量（用于显示体积），
+    // transferred_bytes 只算本次真正走网络的部分（用于算速度）——续传时磁盘上已有
+    // 的部分是瞬间"完成"的，计入速度会得出离谱的带宽。
+    // 总大小未知时（m3u8 按切片计数）total_bytes 为 null
+    pub(super) fn emit_progress(
+        &self,
+        progress: u32,
+        downloaded_bytes: u64,
+        transferred_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
         let _ = self.app_handle.emit(
             "download-progress",
             json!({
                 "url": self.url,
                 "progress": progress,
                 "downloadedBytes": downloaded_bytes,
+                "transferredBytes": transferred_bytes,
                 "totalBytes": total_bytes,
             }),
         );
@@ -82,6 +92,11 @@ impl DownloadEventEmitter {
     }
 
     pub(super) fn emit_completed(&self, file_path: &str) {
+        self.emit_completed_with_warning(file_path, None);
+    }
+
+    // warning：下载本身成功，但结果与预期有出入（如 ffmpeg 不可用导致视频停在 .ts）
+    pub(super) fn emit_completed_with_warning(&self, file_path: &str, warning: Option<&str>) {
         let _ = self.app_handle.emit(
             "download-status",
             json!({
@@ -89,6 +104,7 @@ impl DownloadEventEmitter {
                 "status": "completed",
                 "progress": 100,
                 "filePath": file_path,
+                "warning": warning,
             }),
         );
     }
@@ -237,10 +253,11 @@ async fn stream_to_part_file(
     let mut downloaded_size = resume_from;
     let mut last_progress_update = resume_from;
     if resume_from > 0 {
-        // 让进度条直接跳到续传起点
+        // 让进度条直接跳到续传起点。此刻网络上还一个字节都没走，transferred 记 0
         emitter.emit_progress(
             calculate_progress(downloaded_size, total_size),
             downloaded_size,
+            0,
             total_size,
         );
     }
@@ -265,6 +282,7 @@ async fn stream_to_part_file(
             emitter.emit_progress(
                 calculate_progress(downloaded_size, total_size),
                 downloaded_size,
+                downloaded_size - resume_from,
                 total_size,
             );
             last_progress_update = downloaded_size;
@@ -471,7 +489,7 @@ pub(super) async fn run_course(
     let save_path = base_save_path.join(format!("{title}.{ext}"));
     emitter.emit_target_path(&save_path);
 
-    let download_result: Result<PathBuf, String> = if resource.is_video {
+    let download_result: Result<(PathBuf, Option<String>), String> = if resource.is_video {
         // 视频合成后的真实路径可能是 .mp4（ffmpeg 转封装成功）或 .ts（回退）
         super::m3u8::download(
             &url,
@@ -492,10 +510,10 @@ pub(super) async fn run_course(
             &emitter,
         )
         .await
-        .map(|_| save_path)
+        .map(|_| (save_path, None))
     };
 
-    let final_path = download_result.inspect_err(|e| {
+    let (final_path, warning) = download_result.inspect_err(|e| {
         // 取消不算失败，cancelled 事件由命令包装层统一补发
         if !cancellation_token.is_cancelled() {
             emitter.emit_status(DownloadStatus::Failed(e.clone()), 0);
@@ -504,6 +522,6 @@ pub(super) async fn run_course(
 
     log::info!("课程资源下载完成: {}", final_path.display());
     let file_path_str = final_path.to_string_lossy().into_owned();
-    emitter.emit_completed(&file_path_str);
+    emitter.emit_completed_with_warning(&file_path_str, warning.as_deref());
     Ok(file_path_str)
 }
