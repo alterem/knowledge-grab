@@ -85,7 +85,7 @@
         <section class="help-card">
           <h2 class="section-title">示例链接</h2>
           <p class="mb-3 page-desc">
-            在「课程&视频下载」页粘贴课程页链接即可解析下载。下面是两个可直接试用的示例，点右侧按钮复制：
+            在「课程&视频下载」页粘贴课程页链接即可解析下载；粘贴整册目录页链接（如最后一个示例）会先列出全部课时，勾选后一次性解析并批量下载。下面的示例可直接试用，点右侧按钮复制：
           </p>
           <div class="sample-list">
             <div v-for="sample in sampleLinks" :key="sample.url" class="sample-item">
@@ -207,6 +207,10 @@ const sampleLinks = [
   {
     name: '同步课堂 · 课程视频',
     url: 'https://basic.smartedu.cn/syncClassroom/classActivity?activityId=d1a57023-9b85-11ec-92ef-246e9675e50c&chapterId=4d1209f1-5a80-3f36-bde5-2c06685bf769&teachingmaterialId=cd5b8173-914b-40fd-b48c-d2bf77c00c4a&fromPrepare=0',
+  },
+  {
+    name: '同步课堂 · 整册课程（小学数学人教版三年级上册，一次解析全部课时）',
+    url: 'https://basic.smartedu.cn/syncClassroom/textBook/92a82135-2748-4ec2-9bc4-e3fae0fb80f9',
   },
 ];
 

@@ -88,6 +88,8 @@ pub fn run() {
             api::fetch_cover,
             api::fetch_image,
             api::courses::parse_course_url,
+            api::catalog::parse_course_link,
+            api::catalog::parse_course_lessons,
             api::clear_tch_material_tag_cache,
             login::open_login_window,
             system::open_download_folder_prompt,

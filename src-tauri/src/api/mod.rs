@@ -1,4 +1,5 @@
 pub mod books;
+pub mod catalog;
 pub mod courses;
 pub mod tags;
 
@@ -95,6 +96,7 @@ pub async fn fetch_textbook_categories() -> Result<Vec<DropdownOption>, String> 
 pub async fn clear_tch_material_tag_cache() -> Result<(), String> {
     tags::clear_cache();
     books::clear_cache().await;
+    catalog::clear_cache().await;
     log::info!("已清理标签与书目缓存");
     Ok(())
 }

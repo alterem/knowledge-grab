@@ -38,3 +38,40 @@ export interface CourseParseResult {
   category_path: string[];
   resources: CourseResource[];
 }
+
+// 目录页里的一节课。url 是该课时的详情页地址，交给 parse_course_lessons 批量解析
+export interface CatalogLesson {
+  id: string;
+  title: string;
+  // 形如「第一单元 时、分、秒 / 秒的认识」
+  chapter: string;
+  url: string;
+  resource_type: string;
+}
+
+// 一册教材及其全部课时
+export interface CatalogBook {
+  id: string;
+  title: string;
+  category_path: string[];
+  lessons: CatalogLesson[];
+}
+
+// 同步课堂目录页（列表页 / 整册教材页）的解析结果
+export interface CourseCatalog {
+  title: string;
+  category_path: string[];
+  books: CatalogBook[];
+}
+
+// parse_course_link 的返回值：单个课时页给资源清单，目录页给课时目录
+export type CourseLink =
+  | ({ kind: 'course' } & CourseParseResult)
+  | ({ kind: 'catalog' } & CourseCatalog);
+
+// 批量解析进度事件 course-parse-progress 的载荷
+export interface CourseParseProgress {
+  done: number;
+  total: number;
+  title: string;
+}

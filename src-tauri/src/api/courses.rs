@@ -176,7 +176,7 @@ fn resolve_route(url: &Url) -> Option<Route> {
 }
 
 // resourceType 直接拼进接口路径，限定为小写字母/数字/下划线，防止拼出越权路径
-fn is_safe_segment(s: &str) -> bool {
+pub(crate) fn is_safe_segment(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
@@ -361,7 +361,7 @@ const TAG_DIMENSION_ORDER: &[&str] = &["zxxxd", "zxxxk", "zxxbb", "zxxnj", "zxxc
 // 从详情 JSON 的 tag_list 提取分类目录段。两种形态：
 // - national_lesson 等：标签带 tag_dimension_id，按已知维度排序
 // - special_edu 等：维度为 null，按名称特征归桶（学段/学科/年级/册次）后排序
-fn extract_category_path(detail: &Value) -> Vec<String> {
+pub(crate) fn extract_category_path(detail: &Value) -> Vec<String> {
     let Some(tags) = detail.get("tag_list").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -485,6 +485,16 @@ fn collect_resources(detail: &Value, source: &Source, course_title: &str) -> Vec
 /// 解析课程页 URL，返回其下所有可下载资源。
 #[tauri::command]
 pub async fn parse_course_url(url: String) -> Result<CourseParseResult, String> {
+    parse_course(&url).await
+}
+
+// 该链接是否为单个课时/资源的详情页（目录页解析前先排除这些）
+pub(crate) fn is_course_url(url: &Url) -> bool {
+    resolve_route(url).is_some()
+}
+
+// 供批量解析（整册课程）复用：与命令同逻辑，只是不经过 tauri 的参数封送
+pub(crate) async fn parse_course(url: &str) -> Result<CourseParseResult, String> {
     let parsed = Url::parse(url.trim()).map_err(|e| format!("无效的链接: {e}"))?;
     let route = resolve_route(&parsed).ok_or_else(|| {
         "暂不支持该链接类型，请粘贴课程/视频/课件页面的地址".to_string()

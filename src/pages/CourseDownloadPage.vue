@@ -3,10 +3,11 @@ export default { name: 'CourseDownloadPage' };
 </script>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
-import { ElInput, ElButton, ElMessage, ElIcon, ElImage, ElTag } from 'element-plus';
+import { computed, onBeforeUnmount, reactive, ref } from 'vue';
+import { ElInput, ElButton, ElMessage, ElMessageBox, ElIcon, ElImage, ElTag } from 'element-plus';
 import { Search, Download, VideoPlay, VideoPause, Document, Loading, Check, Close, Refresh, FolderOpened } from '@element-plus/icons-vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   enqueueDownload,
   pauseDownload,
@@ -15,11 +16,30 @@ import {
   type DownloadStatus,
 } from '@/composables/useDownloadManager';
 import { readDownloadSettings } from '@/utils/settings';
-import type { CourseParseResult, CourseResource } from '@/types';
+import type {
+  CatalogBook,
+  CatalogLesson,
+  CourseCatalog,
+  CourseLink,
+  CourseParseProgress,
+  CourseParseResult,
+  CourseResource,
+} from '@/types';
 
 const url = ref('');
 const parsing = ref(false);
-const result = ref<CourseParseResult | null>(null);
+// 已解析出资源的课程。单个链接为 1 项，整册解析时每个课时一项
+const courses = ref<CourseParseResult[]>([]);
+// 目录页解析结果（整册/整个筛选条件下的课时清单），等用户挑选后再逐个解析
+const catalog = ref<CourseCatalog | null>(null);
+const selectedLessons = ref<string[]>([]);
+const lessonParsing = ref(false);
+const parseProgress = reactive({ done: 0, total: 0 });
+
+// 一次入队超过这个数量时先确认，避免误点把上百个任务塞进下载池
+const CONFIRM_BATCH_SIZE = 30;
+// 封面要走后端代理逐张拉取，整册动辄几百个资源，只给靠前的加载，其余用占位图
+const MAX_COVER_PREFETCH = 40;
 
 // 每个资源的下载状态从共享任务池取，key 为其 download_url（与后端取消令牌一致）
 const stateOf = (resource: CourseResource) => useDownload(resource.download_url);
@@ -40,6 +60,29 @@ const primaryText = (status: DownloadStatus) => {
   }
 };
 
+const allLessons = computed<CatalogLesson[]>(() =>
+  catalog.value?.books.flatMap((book) => book.lessons) ?? []
+);
+const totalResources = computed(() =>
+  courses.value.reduce((sum, course) => sum + course.resources.length, 0)
+);
+
+// 课时已按章节顺序排好，顺序聚合即可保持平台上的目录结构。
+// 章节形如「第一单元 … / 秒的认识」，按顶层单元分组，避免碎成一堆单课时小组
+const groupLessons = (book: CatalogBook) => {
+  const groups: { chapter: string; lessons: CatalogLesson[] }[] = [];
+  for (const lesson of book.lessons) {
+    const chapter = lesson.chapter.split(' / ')[0] || '其他';
+    const last = groups[groups.length - 1];
+    if (last && last.chapter === chapter) {
+      last.lessons.push(lesson);
+    } else {
+      groups.push({ chapter, lessons: [lesson] });
+    }
+  }
+  return groups;
+};
+
 // 封面走后端代理转 base64（webview 直连外部图片不稳定，同教材封面做法），按原始 URL 缓存。
 // 值为 'loading' 表示请求中（显示 loading），'' 表示失败/无封面（显示占位图），data URL 表示成功
 const coverCache = reactive(new Map<string, string>());
@@ -49,6 +92,18 @@ const loadCover = (coverUrl: string) => {
   invoke<string>('fetch_image', { url: coverUrl })
     .then((base64) => coverCache.set(coverUrl, `data:image/jpeg;base64,${base64}`))
     .catch(() => coverCache.set(coverUrl, ''));
+};
+
+const prefetchCovers = (list: CourseParseResult[]) => {
+  let budget = MAX_COVER_PREFETCH;
+  for (const course of list) {
+    for (const resource of course.resources) {
+      if (budget <= 0) return;
+      if (!resource.cover_url) continue;
+      loadCover(resource.cover_url);
+      budget -= 1;
+    }
+  }
 };
 
 // 判断缓存值是否为已加载好的图片（区别于 'loading' / '' 占位态）
@@ -66,6 +121,14 @@ const playResource = (resource: CourseResource) => {
   });
 };
 
+const resetResults = () => {
+  courses.value = [];
+  catalog.value = null;
+  selectedLessons.value = [];
+  parseProgress.done = 0;
+  parseProgress.total = 0;
+};
+
 const handleParse = async () => {
   const trimmed = url.value.trim();
   if (!trimmed) {
@@ -73,13 +136,21 @@ const handleParse = async () => {
     return;
   }
   parsing.value = true;
-  result.value = null;
+  resetResults();
   try {
-    result.value = await invoke<CourseParseResult>('parse_course_url', { url: trimmed });
-    if (!result.value.resources.length) {
+    const link = await invoke<CourseLink>('parse_course_link', { url: trimmed });
+    if (link.kind === 'catalog') {
+      catalog.value = link;
+      // 默认全选：整册下载是这个入口最常见的诉求
+      selectedLessons.value = link.books.flatMap((book) => book.lessons.map((l) => l.url));
+      ElMessage.success(`已解析出 ${selectedLessons.value.length} 个课时，选好后点「解析选中课时」`);
+      return;
+    }
+    courses.value = [link];
+    if (!link.resources.length) {
       ElMessage.info('该链接下没有找到可下载的资源');
     } else {
-      for (const r of result.value.resources) loadCover(r.cover_url);
+      prefetchCovers(courses.value);
     }
   } catch (error) {
     ElMessage.error('解析失败: ' + error);
@@ -88,8 +159,58 @@ const handleParse = async () => {
   }
 };
 
+// 目录页第二步：把选中的课时逐个解析成资源清单（后端并发请求并上报进度）
+let unlistenProgress: UnlistenFn | null = null;
+
+const parseSelectedLessons = async () => {
+  const urls = [...selectedLessons.value];
+  if (!urls.length) {
+    ElMessage.warning('请先勾选要解析的课时');
+    return;
+  }
+
+  lessonParsing.value = true;
+  parseProgress.done = 0;
+  parseProgress.total = urls.length;
+  unlistenProgress?.();
+  unlistenProgress = await listen<CourseParseProgress>('course-parse-progress', ({ payload }) => {
+    parseProgress.done = payload.done;
+    parseProgress.total = payload.total;
+  });
+
+  try {
+    const results = await invoke<CourseParseResult[]>('parse_course_lessons', { urls });
+    courses.value = results;
+    prefetchCovers(results);
+    const skipped = urls.length - results.length;
+    ElMessage.success(
+      skipped > 0
+        ? `解析完成：${results.length} 个课时可下载，${skipped} 个没有公开资源已跳过`
+        : `解析完成，共 ${results.length} 个课时`
+    );
+  } catch (error) {
+    ElMessage.error('解析失败: ' + error);
+  } finally {
+    unlistenProgress?.();
+    unlistenProgress = null;
+    lessonParsing.value = false;
+  }
+};
+
+onBeforeUnmount(() => {
+  unlistenProgress?.();
+  unlistenProgress = null;
+});
+
+const selectAllLessons = () => {
+  selectedLessons.value = allLessons.value.map((lesson) => lesson.url);
+};
+const clearSelectedLessons = () => {
+  selectedLessons.value = [];
+};
+
 // 入队单个资源；排队与并发由全局下载池调度
-const enqueueResource = (resource: CourseResource): boolean => {
+const enqueueResource = (resource: CourseResource, course: CourseParseResult): boolean => {
   const settings = readDownloadSettings();
   if (!settings.downloadPath) {
     ElMessage.warning('下载路径未设置，请前往设置页面配置');
@@ -100,27 +221,28 @@ const enqueueResource = (resource: CourseResource): boolean => {
     url: resource.download_url,
     kind: resource.is_video ? 'course-video' : 'course-doc',
     title: resource.title,
-    subtitle: result.value?.title ?? '',
+    subtitle: course.title,
     payload: {
       download_url: resource.download_url,
       title: resource.title,
       format: resource.format,
       is_video: resource.is_video,
-      course_title: result.value?.title ?? null,
+      // 同一课时的资源归到以课时名命名的子目录，整册下载时不会混在一起
+      course_title: course.title,
       save_by_category: settings.saveByCategory,
-      category_path: result.value?.category_path ?? [],
+      category_path: course.category_path,
     },
   });
 };
 
 // 主按钮：暂停/中断/失败走继续（续传），其余（重新）入队
-const startDownload = (resource: CourseResource) => {
+const startDownload = (resource: CourseResource, course: CourseParseResult) => {
   const state = stateOf(resource);
   if (isResumableStatus(state.status)) {
     resumeDownload(resource.download_url);
     return;
   }
-  enqueueResource(resource);
+  enqueueResource(resource, course);
 };
 
 const pauseResource = (resource: CourseResource) => {
@@ -139,24 +261,19 @@ const revealResource = (resource: CourseResource) => {
   });
 };
 
-// 批量下载 = 未完成的资源全部入队
-const handleBatchDownload = () => {
-  const settings = readDownloadSettings();
-  if (!settings.downloadPath) {
-    ElMessage.warning('下载路径未设置，请前往设置页面配置');
-    return;
-  }
-  if (!result.value?.resources.length) return;
-
+// 批量下载：把给定课程里未完成的资源全部入队
+const enqueueCourses = (list: CourseParseResult[]) => {
   let queued = 0;
-  for (const resource of result.value.resources) {
-    const state = stateOf(resource);
-    if (state.status === 'completed') continue;
-    if (isResumableStatus(state.status)) {
-      resumeDownload(resource.download_url);
-      queued += 1;
-    } else if (enqueueResource(resource)) {
-      queued += 1;
+  for (const course of list) {
+    for (const resource of course.resources) {
+      const state = stateOf(resource);
+      if (state.status === 'completed') continue;
+      if (isResumableStatus(state.status)) {
+        resumeDownload(resource.download_url);
+        queued += 1;
+      } else if (enqueueResource(resource, course)) {
+        queued += 1;
+      }
     }
   }
 
@@ -166,6 +283,29 @@ const handleBatchDownload = () => {
     ElMessage.info('资源都已下载完成或在队列中');
   }
 };
+
+const handleBatchDownload = async (list: CourseParseResult[]) => {
+  const settings = readDownloadSettings();
+  if (!settings.downloadPath) {
+    ElMessage.warning('下载路径未设置，请前往设置页面配置');
+    return;
+  }
+  const pending = list.reduce((sum, course) => sum + course.resources.length, 0);
+  if (!pending) return;
+
+  if (pending > CONFIRM_BATCH_SIZE) {
+    try {
+      await ElMessageBox.confirm(
+        `即将把 ${pending} 个资源加入下载队列，视频较多时会占用较长时间和磁盘空间，确定继续吗？`,
+        '批量下载',
+        { confirmButtonText: '开始下载', cancelButtonText: '再想想', type: 'warning' }
+      );
+    } catch {
+      return;
+    }
+  }
+  enqueueCourses(list);
+};
 // 下载完成/失败的汇总提示由全局下载池统一处理
 </script>
 
@@ -174,13 +314,13 @@ const handleBatchDownload = () => {
     <div class="toolbar">
       <div class="page-title">课程 / 视频下载</div>
       <div class="page-desc">
-        粘贴国家中小学智慧教育平台的课程、视频或课件页面链接，解析后即可下载。视频为加密流，下载后自动解密。
+        粘贴国家中小学智慧教育平台的课程页链接即可下载；粘贴「课程教学」里选好学段/学科/版本/年级/册次后的目录页链接，可整册批量下载。视频为加密流，下载后自动解密。
       </div>
 
       <div class="parse-row">
         <el-input
           v-model="url"
-          placeholder="粘贴课程页链接，如 https://basic.smartedu.cn/syncClassroom/classActivity?activityId=..."
+          placeholder="课程页或整册目录页链接，如 https://basic.smartedu.cn/syncClassroom?defaultTag=..."
           clearable
           class="url-input"
           @keyup.enter="handleParse"
@@ -189,26 +329,110 @@ const handleBatchDownload = () => {
           解析
         </el-button>
         <el-button
-          v-if="result && result.resources.length > 1"
+          v-if="totalResources > 1"
           :icon="Download"
-          @click="handleBatchDownload"
+          @click="handleBatchDownload(courses)"
         >
-          全部下载
+          全部下载（{{ totalResources }}）
         </el-button>
       </div>
     </div>
 
     <div class="list-area">
-      <div v-if="result && result.resources.length" class="course-block">
+      <!-- 第一步：目录页解析出的课时清单，勾选后再解析资源 -->
+      <div v-if="catalog" class="catalog-block app-card">
+        <div class="catalog-head">
+          <div class="course-title">
+            {{ catalog.title }}
+            <el-tag size="small" type="info" effect="plain" round>
+              {{ allLessons.length }} 个课时
+            </el-tag>
+            <el-tag
+              v-for="seg in catalog.category_path"
+              :key="seg"
+              size="small"
+              type="info"
+              effect="plain"
+            >
+              {{ seg }}
+            </el-tag>
+          </div>
+          <div class="catalog-actions">
+            <el-button size="small" plain @click="selectAllLessons">全选</el-button>
+            <el-button size="small" plain @click="clearSelectedLessons">清空</el-button>
+            <el-button
+              type="primary"
+              size="small"
+              :loading="lessonParsing"
+              :disabled="!selectedLessons.length"
+              @click="parseSelectedLessons"
+            >
+              解析选中课时（{{ selectedLessons.length }}）
+            </el-button>
+          </div>
+        </div>
+
+        <div v-if="lessonParsing" class="catalog-progress">
+          <el-progress
+            :percentage="parseProgress.total ? Math.round((parseProgress.done / parseProgress.total) * 100) : 0"
+            :stroke-width="8"
+            :show-text="false"
+          />
+          <div class="progress-meta">
+            <span>正在解析课时资源…</span>
+            <span>{{ parseProgress.done }} / {{ parseProgress.total }}</span>
+          </div>
+        </div>
+
+        <div v-for="book in catalog.books" :key="book.id" class="catalog-book">
+          <div v-if="catalog.books.length > 1" class="book-title">
+            {{ book.title }}
+            <el-tag size="small" type="info" effect="plain" round>
+              {{ book.lessons.length }} 课时
+            </el-tag>
+          </div>
+          <el-checkbox-group v-model="selectedLessons">
+            <div v-for="group in groupLessons(book)" :key="book.id + group.chapter" class="chapter-group">
+              <div v-if="group.chapter" class="chapter-title">{{ group.chapter }}</div>
+              <div class="lesson-list">
+                <el-checkbox
+                  v-for="lesson in group.lessons"
+                  :key="lesson.url"
+                  :value="lesson.url"
+                  class="lesson-item"
+                >
+                  {{ lesson.title }}
+                </el-checkbox>
+              </div>
+            </div>
+          </el-checkbox-group>
+        </div>
+      </div>
+
+      <!-- 第二步：解析出的资源清单（单个链接时直接到这一步） -->
+      <div
+        v-for="(course, courseIndex) in courses"
+        :key="course.title + courseIndex"
+        class="course-block"
+      >
         <div class="course-title">
-          {{ result.title }}
+          {{ course.title }}
           <el-tag size="small" type="info" effect="plain" round>
-            {{ result.resources.length }} 个资源
+            {{ course.resources.length }} 个资源
           </el-tag>
+          <el-button
+            v-if="courses.length > 1 && course.resources.length > 1"
+            size="small"
+            plain
+            :icon="Download"
+            @click="handleBatchDownload([course])"
+          >
+            下载本课时
+          </el-button>
         </div>
 
         <div class="resource-grid">
-          <div v-for="resource in result.resources" :key="resource.id || resource.download_url" class="res-card app-card">
+          <div v-for="resource in course.resources" :key="resource.id || resource.download_url" class="res-card app-card">
             <div class="res-cover">
               <!-- 封面加载中 -->
               <div v-if="coverCache.get(resource.cover_url) === 'loading'" class="cover-fallback">
@@ -255,7 +479,7 @@ const handleBatchDownload = () => {
                   {{ resource.format.toUpperCase() }}
                 </el-tag>
                 <el-tag
-                  v-for="seg in result.category_path"
+                  v-for="seg in course.category_path"
                   :key="seg"
                   size="small"
                   type="info"
@@ -314,7 +538,7 @@ const handleBatchDownload = () => {
                   :type="stateOf(resource).status === 'completed' ? 'success' : 'primary'"
                   :disabled="isActiveStatus(stateOf(resource).status)"
                   :loading="stateOf(resource).status === 'downloading'"
-                  @click="startDownload(resource)"
+                  @click="startDownload(resource, course)"
                 >
                   <el-icon class="mr-1" v-if="stateOf(resource).status !== 'downloading'">
                     <Refresh v-if="stateOf(resource).status === 'completed'" />
@@ -361,12 +585,12 @@ const handleBatchDownload = () => {
       </div>
 
       <el-empty
-        v-else-if="!parsing"
-        description="粘贴链接后点击「解析」，即可看到该课程下的视频与课件"
+        v-if="!parsing && !catalog && !courses.length"
+        description="粘贴链接后点击「解析」；整册目录页会先列出全部课时，勾选后再解析资源"
         :image-size="110"
         class="empty-state"
       />
-      <div v-else class="parsing-state">
+      <div v-else-if="parsing" class="parsing-state">
         <el-icon class="is-loading" :size="28"><Loading /></el-icon>
         <span>正在解析…</span>
       </div>
@@ -417,11 +641,94 @@ const handleBatchDownload = () => {
 .course-title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 15px;
   font-weight: 600;
   color: var(--text-color);
   margin-bottom: 14px;
+}
+
+/* 目录（课时清单）区 */
+.catalog-block {
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.catalog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.catalog-head .course-title {
+  margin-bottom: 0;
+}
+
+.catalog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.catalog-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.catalog-progress {
+  margin-top: 12px;
+}
+
+.catalog-book + .catalog-book {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.book-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-color);
+  margin: 12px 0 6px;
+}
+
+.chapter-group {
+  margin-top: 10px;
+}
+
+.chapter-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.lesson-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px 12px;
+}
+
+.lesson-item {
+  height: 26px;
+  margin-right: 0;
+  overflow: hidden;
+}
+
+.lesson-item :deep(.el-checkbox__label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.course-block + .course-block {
+  margin-top: 20px;
 }
 
 .resource-grid {

@@ -46,6 +46,44 @@ pub struct CourseParseResult {
     pub resources: Vec<CourseResource>,
 }
 
+// 目录页里的一节课。url 是该课时的详情页地址，可直接交给 parse_course_url 解析
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogLesson {
+    pub id: String,
+    pub title: String,
+    // 所属章节，形如「第一单元 时、分、秒 / 秒的认识」，用于分组展示
+    pub chapter: String,
+    pub url: String,
+    // 平台的资源类型（national_lesson / elite_lesson / knowledge_micro_lesson_package…）
+    pub resource_type: String,
+}
+
+// 一册教材（同步课堂里的「整册课程」）及其全部课时
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogBook {
+    pub id: String,
+    pub title: String,
+    pub category_path: Vec<String>,
+    pub lessons: Vec<CatalogLesson>,
+}
+
+// 同步课堂目录页（列表页 / 整册教材页）的解析结果
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseCatalog {
+    pub title: String,
+    pub category_path: Vec<String>,
+    pub books: Vec<CatalogBook>,
+}
+
+// 一个链接的解析结果：要么是单个课程（含资源清单），要么是一份课时目录。
+// 内部标签 kind 供前端区分（course / catalog）
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CourseLink {
+    Course(CourseParseResult),
+    Catalog(CourseCatalog),
+}
+
 // 前端发起课程资源下载时回传的信息
 #[derive(Debug, Clone, Deserialize)]
 pub struct CourseDownloadInfo {
