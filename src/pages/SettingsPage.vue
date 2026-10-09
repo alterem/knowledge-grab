@@ -15,7 +15,9 @@
               <div class="flex items-center w-full space-x-2">
                 <el-input v-model="apiToken" placeholder="请输入登录凭据 Access Token（下载教材必需）" show-password clearable
                   class="flex-1"></el-input>
-                <el-button type="primary" @click="loginAndFetchToken">登录平台自动获取</el-button>
+                <el-button type="primary" :loading="loginInProgress" @click="loginAndFetchToken">
+                  {{ loginInProgress ? '等待登录完成' : '登录平台自动获取' }}
+                </el-button>
               </div>
               <div class="mt-1 text-xs form-hint">
                 平台已要求登录后才能下载教材，令牌仅保存在本机。点击上方按钮登录官方页面自动获取，或
@@ -245,6 +247,7 @@ const showMacKeyHelp = ref(false);
 const ffmpegPath = ref('');
 const showFfmpegHelp = ref(false);
 const checkingFfmpeg = ref(false);
+const loginInProgress = ref(false);
 
 // 关于与更新
 const appVersion = ref('');
@@ -299,17 +302,25 @@ const copyTokenScript = async () => {
 };
 
 const loginAndFetchToken = async () => {
+  loginInProgress.value = true;
   try {
     // 传入当前主题，登录窗口的标题栏与加载背景色随应用主题
     await invoke('open_login_window', { isDark: isDarkMode.value });
-    ElMessage.info('请在弹出的窗口中登录，成功后将自动获取 Access Token');
+    ElMessage.info('请在弹出的官方页面完成登录，成功后会自动保存 Access Token');
   } catch (error) {
+    loginInProgress.value = false;
     console.error('打开登录窗口失败:', error);
     ElMessage.error('打开登录窗口失败: ' + error);
   }
 };
 
+type LoginWindowStatus = {
+  status: 'opened' | 'loading' | 'loaded' | 'redirecting' | 'ready' | 'timeout' | 'succeeded' | 'closed';
+  message?: string;
+};
+
 let unlistenTokenCaptured: UnlistenFn | null = null;
+let unlistenLoginStatus: UnlistenFn | null = null;
 
 onMounted(async () => {
   apiToken.value = localStorage.getItem(STORAGE_KEYS.token) || '';
@@ -331,13 +342,28 @@ onMounted(async () => {
       const token = event.payload?.token;
       if (token) apiToken.value = token;
       if (event.payload?.mac_key) macKey.value = event.payload.mac_key;
+      loginInProgress.value = false;
     }
   );
+
+  unlistenLoginStatus = await listen<LoginWindowStatus>('login-window-status', (event) => {
+    const { status } = event.payload;
+    if (status === 'opened' || status === 'loading' || status === 'redirecting') {
+      loginInProgress.value = true;
+    } else if (status === 'timeout') {
+      loginInProgress.value = false;
+      showTokenHelp.value = true;
+    } else if (status === 'succeeded' || status === 'closed') {
+      loginInProgress.value = false;
+    }
+  });
 });
 
 onUnmounted(() => {
   unlistenTokenCaptured?.();
   unlistenTokenCaptured = null;
+  unlistenLoginStatus?.();
+  unlistenLoginStatus = null;
 });
 
 const selectDownloadPath = async () => {

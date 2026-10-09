@@ -73,6 +73,12 @@ provide('toggleTheme', toggleTheme);
 
 // 登录窗口捕获的令牌在应用层持久化，避免用户离开设置页后丢失
 let unlistenTokenCaptured: UnlistenFn | null = null;
+let unlistenLoginStatus: UnlistenFn | null = null;
+
+type LoginWindowStatus = {
+  status: 'timeout' | 'closed' | string;
+  message?: string;
+};
 
 onMounted(async () => {
   isDarkMode.value = localStorage.getItem(STORAGE_KEYS.theme) === 'dark';
@@ -96,6 +102,19 @@ onMounted(async () => {
       ElMessage.success('已自动获取 Access Token 并保存');
     }
   );
+
+  unlistenLoginStatus = await listen<LoginWindowStatus>('login-window-status', (event) => {
+    const { status, message } = event.payload;
+    if (status === 'timeout') {
+      ElMessage.warning({
+        message: message || '官方登录页加载超时，请检查网络后重试',
+        duration: 8000,
+        showClose: true,
+      });
+    } else if (status === 'closed') {
+      ElMessage.info(message || '登录窗口已关闭，未获取到 Access Token');
+    }
+  });
 
   // 启动后延迟静默检查更新，避开首屏加载；无更新/失败都不打扰用户
   if (isAutoCheckEnabled()) {
@@ -125,6 +144,8 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown);
   unlistenTokenCaptured?.();
   unlistenTokenCaptured = null;
+  unlistenLoginStatus?.();
+  unlistenLoginStatus = null;
 });
 
 </script>
