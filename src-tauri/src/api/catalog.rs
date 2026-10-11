@@ -666,7 +666,7 @@ mod tests {
     use super::*;
 
     fn target_of(url: &str) -> Option<CatalogTarget> {
-        resolve_catalog(&Url::parse(url).unwrap())
+        resolve_catalog(&Url::parse(url).expect("测试 URL 应合法"))
     }
 
     #[test]
