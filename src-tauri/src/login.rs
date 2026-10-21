@@ -127,10 +127,12 @@ const TOKEN_POLL_SCRIPT: &str = r##"
 
 /// 打开官方平台登录窗口；登录成功后注入脚本捕获 token，
 /// 通过 access-token-captured 事件回传前端并自动关窗。用户凭据不经过本应用。
-/// 必须是同步命令：macOS 上创建 webview 窗口要求在主线程执行。
+/// 必须是异步命令：Windows 上在同步命令（运行于主线程）中创建 WebView2 窗口会死锁，
+/// 表现为登录窗口黑屏、主窗口与登录窗口均无响应且无法关闭（#11）。
+/// 异步命令运行在后台线程，Tauri 会把窗口创建派发到主线程事件循环，macOS 同样安全。
 /// is_dark 来自前端当前主题，用于让窗口主题与背景色跟随应用。
 #[tauri::command]
-pub fn open_login_window(
+pub async fn open_login_window(
     app_handle: tauri::AppHandle,
     is_dark: Option<bool>,
 ) -> Result<(), String> {
